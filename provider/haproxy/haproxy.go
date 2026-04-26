@@ -381,7 +381,7 @@ func (dm *drainMgr) RemoveEndpointFromDrain(ep *config.Endpoint) {
 		dm.mu.Lock()
 		delete(dm.drainList, ep.Name)
 		dm.mu.Unlock()
-		log.Info("Removed Endpoint %v From Drain", ep)
+		log.Infof("Removed Endpoint %v From Drain", ep)
 	}
 }
 

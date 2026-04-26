@@ -495,7 +495,7 @@ func (lbp *LBProvider) updateRancherLBService(lbConfig *config.LoadBalancerConfi
 	if update {
 		toUpdate := make(map[string]interface{})
 		toUpdate["lbConfig"] = updatedConfig
-		log.Infof("Updating Rancher LB with the new lbConfig [%s] ", updatedConfig)
+		log.Infof("Updating Rancher LB with the new lbConfig [%v] ", updatedConfig)
 		if _, err = lbp.client.LoadBalancerService.Update(lb, toUpdate); err != nil {
 			return fmt.Errorf("failed to update lb [%s]. Error: %#v", lb.Name, err)
 		}
@@ -664,7 +664,7 @@ func (lbp *LBProvider) createRancherLBService(lbConfig *config.LoadBalancerConfi
 		return lb, nil
 	}
 
-	log.Infof("Creating lb service [%s]", lb)
+	log.Infof("Creating lb service [%v]", lb)
 
 	var lbPorts []string
 	for _, lbFrontend := range lbConfig.FrontendServices {
