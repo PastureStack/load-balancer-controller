@@ -153,19 +153,19 @@ func newLoadBalancerController(kubeClient *client.Client, resyncPeriod time.Dura
 	ingEventHandler := framework.ResourceEventHandlerFuncs{
 		AddFunc: func(obj interface{}) {
 			addIng := obj.(*extensions.Ingress)
-			lbc.recorder.Eventf(addIng, api.EventTypeNormal, "CREATE", fmt.Sprintf("%s/%s", addIng.Namespace, addIng.Name))
+			lbc.recorder.Eventf(addIng, api.EventTypeNormal, "CREATE", "%s", fmt.Sprintf("%s/%s", addIng.Namespace, addIng.Name))
 			lbc.ingQueue.Enqueue(syncAll)
 			lbc.syncQueue.Enqueue(syncAll)
 		},
 		DeleteFunc: func(obj interface{}) {
 			upIng := obj.(*extensions.Ingress)
-			lbc.recorder.Eventf(upIng, api.EventTypeNormal, "DELETE", fmt.Sprintf("%s/%s", upIng.Namespace, upIng.Name))
+			lbc.recorder.Eventf(upIng, api.EventTypeNormal, "DELETE", "%s", fmt.Sprintf("%s/%s", upIng.Namespace, upIng.Name))
 			lbc.syncQueue.Enqueue(syncAll)
 		},
 		UpdateFunc: func(old, cur interface{}) {
 			if !reflect.DeepEqual(old, cur) {
 				upIng := cur.(*extensions.Ingress)
-				lbc.recorder.Eventf(upIng, api.EventTypeNormal, "UPDATE", fmt.Sprintf("%s/%s", upIng.Namespace, upIng.Name))
+				lbc.recorder.Eventf(upIng, api.EventTypeNormal, "UPDATE", "%s", fmt.Sprintf("%s/%s", upIng.Namespace, upIng.Name))
 				lbc.ingQueue.Enqueue(syncAll)
 				lbc.syncQueue.Enqueue(syncAll)
 			}

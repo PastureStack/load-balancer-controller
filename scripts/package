@@ -8,6 +8,7 @@ SUFFIX=""
 source $(dirname $0)/version
 
 cd $(dirname $0)/../package
+mkdir -p ../dist
 
 TAG=${TAG:-${VERSION}${SUFFIX}}
 REPO=${REPO:-rancher}

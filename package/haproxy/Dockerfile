@@ -1,6 +1,7 @@
 FROM ubuntu:26.04 AS haproxy-builder
 
 ARG HAPROXY_VERSION=3.3.7
+ARG DEBIAN_FRONTEND=noninteractive
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
@@ -22,6 +23,8 @@ RUN curl -sfL https://www.haproxy.org/download/3.3/src/haproxy-${HAPROXY_VERSION
 
 FROM ubuntu:26.04
 
+ARG DEBIAN_FRONTEND=noninteractive
+
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     curl \
@@ -38,8 +41,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     vim-tiny \
     wget \
     zlib1g && \
-    rm -rf /var/lib/apt/lists/* && \
-    curl -sLf https://github.com/rancher/loglevel/releases/download/v0.1/loglevel-amd64-v0.1.tar.gz | tar xvzf - -C /usr/bin
+    rm -rf /var/lib/apt/lists/*
 
 COPY --from=haproxy-builder /usr/local/sbin/haproxy /usr/sbin/haproxy
 
@@ -53,9 +55,9 @@ RUN mkdir /var/log/haproxy
 RUN touch /var/log/haproxy/traffic /var/log/haproxy/events /var/log/haproxy/errors
 RUN cat /etc/haproxy/logrotate.cfg >> /etc/logrotate.d/haproxy
 
-ENV SSL_SCRIPT_COMMIT=98660ada3d800f653fc1f105771b5173f9d1a019
-RUN wget -O /usr/bin/update-rancher-ssl https://raw.githubusercontent.com/rancher/rancher/${SSL_SCRIPT_COMMIT}/server/bin/update-rancher-ssl && \
-    chmod +x /usr/bin/update-rancher-ssl
+COPY update-rancher-ssl /usr/bin/
+COPY loglevel /usr/bin/
+RUN chmod +x /usr/bin/update-rancher-ssl /usr/bin/loglevel
 
 COPY lb-controller.sh /usr/bin/
 

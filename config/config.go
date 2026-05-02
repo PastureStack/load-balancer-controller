@@ -10,7 +10,7 @@ type BackendServices []*BackendService
 type FrontendServices []*FrontendService
 type Endpoints []*Endpoint
 
-//supported protocols
+// supported protocols
 const (
 	HTTPProto  = "http"
 	HTTPSProto = "https"

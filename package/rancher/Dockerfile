@@ -1,19 +1,20 @@
-FROM rancher/agent-base:v0.3.0
+FROM ghcr.io/chen21019/rc16-agent-base:v0.3.1
 
-MAINTAINER Rancher Labs, Inc.
+ARG DEBIAN_FRONTEND=noninteractive
+
 RUN apt-get update && \
-    apt-get upgrade -y && \
-    apt-get install -y \
-    wget \
-    ca-certificates \
-    openssl \
-    libssl-dev \
-    unzip
+    apt-get install -y --no-install-recommends \
+        ca-certificates \
+        curl \
+        jq \
+        openssl \
+        unzip \
+        wget && \
+    rm -rf /var/lib/apt/lists/*
 
-ENV SSL_SCRIPT_COMMIT 98660ada3d800f653fc1f105771b5173f9d1a019
-RUN wget -O /usr/bin/update-rancher-ssl https://raw.githubusercontent.com/rancher/rancher/${SSL_SCRIPT_COMMIT}/server/bin/update-rancher-ssl && \
-    chmod +x /usr/bin/update-rancher-ssl && \
-    curl -sLf https://github.com/rancher/loglevel/releases/download/v0.1/loglevel-amd64-v0.1.tar.gz | tar xvzf - -C /usr/bin
+COPY update-rancher-ssl /usr/bin/
+COPY loglevel /usr/bin/
+RUN chmod +x /usr/bin/update-rancher-ssl /usr/bin/loglevel
 
 COPY entry.sh /usr/bin/
 COPY lb-controller /usr/bin/
