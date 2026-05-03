@@ -14,6 +14,8 @@ import (
 )
 
 var (
+	VERSION = "dev"
+
 	lbControllerName string
 	lbProviderName   string
 	metadataAddress  string
@@ -29,6 +31,7 @@ func main() {
 		log.SetLevelString("debug")
 	}
 	app := cli.NewApp()
+	app.Version = VERSION
 
 	app.Flags = []cli.Flag{
 		cli.StringFlag{

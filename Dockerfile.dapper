@@ -1,5 +1,7 @@
 FROM ubuntu:26.04
 
+RUN rm -f /usr/bin/pebble
+
 ARG DAPPER_HOST_ARCH=amd64
 ENV HOST_ARCH=${DAPPER_HOST_ARCH} ARCH=${DAPPER_HOST_ARCH}
 ENV DEBIAN_FRONTEND=noninteractive

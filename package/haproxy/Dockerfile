@@ -1,5 +1,7 @@
 FROM ubuntu:26.04 AS haproxy-builder
 
+RUN rm -f /usr/bin/pebble
+
 ARG HAPROXY_VERSION=3.3.7
 ARG DEBIAN_FRONTEND=noninteractive
 
@@ -22,6 +24,8 @@ RUN curl -sfL https://www.haproxy.org/download/3.3/src/haproxy-${HAPROXY_VERSION
     make -C /tmp/haproxy-${HAPROXY_VERSION} install-bin
 
 FROM ubuntu:26.04
+
+RUN rm -f /usr/bin/pebble
 
 ARG DEBIAN_FRONTEND=noninteractive
 
