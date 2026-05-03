@@ -1,13 +1,16 @@
 FROM ubuntu:26.04
 
-RUN rm -f /usr/bin/pebble
-
 ARG DAPPER_HOST_ARCH=amd64
-ENV HOST_ARCH=${DAPPER_HOST_ARCH} ARCH=${DAPPER_HOST_ARCH}
+ARG GO_VERSION=1.26.2
+ARG DOCKER_VERSION=29.4.2
+ARG GO_LINUX_AMD64_SHA256=990e6b4bbba816dc3ee129eaeaf4b42f17c2800b88a2166c265ac1a200262282
+ARG GO_LINUX_ARM64_SHA256=c958a1fe1b361391db163a485e21f5f228142d6f8b584f6bef89b26f66dc5b23
+
 ENV DEBIAN_FRONTEND=noninteractive
+ENV HOST_ARCH=${DAPPER_HOST_ARCH} ARCH=${DAPPER_HOST_ARCH}
 
 RUN apt-get update && \
-    apt-get install -y --no-install-recommends \
+    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
         bash \
         ca-certificates \
         curl \
@@ -15,47 +18,53 @@ RUN apt-get update && \
         gcc \
         git \
         libc6-dev \
+        make \
         tar \
         xz-utils && \
     rm -rf /var/lib/apt/lists/* && \
+    rm -f /usr/bin/pebble && \
     rm -f /bin/sh && ln -s /bin/bash /bin/sh
 
-RUN git config --system --add safe.directory '*'
+ENV GOPATH=/go \
+    PATH=/go/bin:/usr/local/go/bin:${PATH} \
+    SHELL=/bin/bash \
+    GO111MODULE=off \
+    GO15VENDOREXPERIMENT=1 \
+    GOCACHE=/tmp/go-build-cache \
+    GOTELEMETRY=off \
+    XDG_CONFIG_HOME=/tmp/go-config \
+    GIT_CONFIG_GLOBAL=/tmp/gitconfig
 
-ARG GO_VERSION=1.26.2
-ARG GO_SHA256_amd64=990e6b4bbba816dc3ee129eaeaf4b42f17c2800b88a2166c265ac1a200262282
-ARG GO_SHA256_arm=0000e45577827b0a8868588c543cbe4232853def1d3d7a344ad6e60ce2b015c8
-ARG DOCKER_VERSION=29.4.1
-ENV GOLANG_ARCH_amd64=amd64 GOLANG_ARCH_arm=armv6l GOLANG_ARCH=GOLANG_ARCH_${ARCH} \
-    GO_SHA256=GO_SHA256_${ARCH} \
-    DOCKER_ARCH_amd64=x86_64 DOCKER_ARCH_arm=armhf DOCKER_ARCH=DOCKER_ARCH_${ARCH} \
-    GOPATH=/go PATH=/go/bin:/usr/local/go/bin:${PATH} SHELL=/bin/bash \
-    GO111MODULE=off GO15VENDOREXPERIMENT=1
-
-RUN curl -fsSL -o /tmp/go.tgz "https://go.dev/dl/go${GO_VERSION}.linux-${!GOLANG_ARCH}.tar.gz" && \
-    echo "${!GO_SHA256}  /tmp/go.tgz" | sha256sum -c - && \
-    tar -C /usr/local -xzf /tmp/go.tgz && \
+RUN case "${DAPPER_HOST_ARCH}" in \
+        amd64) go_arch=amd64; go_sha="${GO_LINUX_AMD64_SHA256}" ;; \
+        arm64) go_arch=arm64; go_sha="${GO_LINUX_ARM64_SHA256}" ;; \
+        *) echo "unsupported DAPPER_HOST_ARCH=${DAPPER_HOST_ARCH}" >&2; exit 1 ;; \
+    esac && \
+    curl -fsSL -o /tmp/go.tgz "https://go.dev/dl/go${GO_VERSION}.linux-${go_arch}.tar.gz" && \
+    echo "${go_sha}  /tmp/go.tgz" | sha256sum -c - && \
+    tar -xzf /tmp/go.tgz -C /usr/local && \
     rm -f /tmp/go.tgz && \
-    curl -sfL "https://download.docker.com/linux/static/stable/${!DOCKER_ARCH}/docker-${DOCKER_VERSION}.tgz" | \
+    go version
+
+RUN case "${DAPPER_HOST_ARCH}" in \
+        amd64) docker_arch=x86_64 ;; \
+        arm64) docker_arch=aarch64 ;; \
+        *) echo "unsupported DAPPER_HOST_ARCH=${DAPPER_HOST_ARCH}" >&2; exit 1 ;; \
+    esac && \
+    curl -fsSL "https://download.docker.com/linux/static/stable/${docker_arch}/docker-${DOCKER_VERSION}.tgz" | \
         tar xzf - -C /usr/bin --strip-components=1 docker/docker && \
     chmod +x /usr/bin/docker && \
-    mkdir -p /go/bin /go/src && \
-    go version && \
     docker --version
-
-ENV TRASH_VERSION=v0.2.7
-RUN git clone https://github.com/rancher/trash.git /go/src/github.com/rancher/trash && \
-    (cd /go/src/github.com/rancher/trash && git checkout -q ${TRASH_VERSION}) && \
-    go install github.com/rancher/trash && \
-    rm -rf /go/src/github.com/rancher/trash
-
-RUN GO111MODULE=on GOBIN=/go/bin go install golang.org/x/lint/golint@latest
 
 ENV DAPPER_SOURCE=/go/src/github.com/rancher/lb-controller/
 ENV DAPPER_OUTPUT="./bin ./dist"
 ENV DAPPER_DOCKER_SOCKET=true
+ENV DAPPER_ENV="TAG REPO IMAGE_NAMESPACE IMAGE_PREFIX VERSION_OVERRIDE"
 ENV HOME=${DAPPER_SOURCE}
 WORKDIR ${DAPPER_SOURCE}
+
+RUN git config --system --add safe.directory ${DAPPER_SOURCE} && \
+    git config --system --add safe.directory /go/src/github.com/rancher/lb-controller
 
 ENTRYPOINT ["./scripts/entry"]
 CMD ["ci"]

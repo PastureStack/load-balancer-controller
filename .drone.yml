@@ -1,24 +1,22 @@
----
 kind: pipeline
-name: default
+name: amd64
 
 platform:
   os: linux
   arch: amd64
 
 steps:
-- name: build
-  pull: default
-  image: rancher/dind:v1.10.0-rancher1
-  commands:
-  - wrapdocker
-  - make ci
-  privileged: true
-  volumes:
-  - name: socket
-    path: /var/run/docker.sock
+  - name: build-amd64
+    image: ubuntu:26.04
+    volumes:
+      - name: docker
+        path: /var/run/docker.sock
+    commands:
+      - apt-get update
+      - DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends ca-certificates docker.io git make
+      - DAPPER_HOST_ARCH=amd64 make ci
 
 volumes:
-- name: socket
-  host:
-    path: /var/run/docker.sock
+  - name: docker
+    host:
+      path: /var/run/docker.sock

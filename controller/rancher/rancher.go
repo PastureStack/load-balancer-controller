@@ -358,7 +358,7 @@ func (lbc *LoadBalancerController) BuildConfigFromMetadata(lbName, envUUID, self
 
 		if len(hostname) > 2 {
 			if strings.HasPrefix(hostname, "*") {
-				hostname = hostname[1:len(hostname)]
+				hostname = hostname[1:]
 				comparator = config.EndRuleComparator
 			} else if strings.HasSuffix(hostname, "*") {
 				hostname = hostname[:len(hostname)-1]

@@ -1,5 +1,7 @@
 FROM ghcr.io/chen21019/rc16-agent-base:v0.3.1
 
+RUN rm -f /usr/bin/pebble
+
 ARG DEBIAN_FRONTEND=noninteractive
 
 RUN apt-get update && \

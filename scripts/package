@@ -12,6 +12,7 @@ mkdir -p ../dist
 
 TAG=${TAG:-${VERSION}${SUFFIX}}
 REPO=${REPO:-rancher}
+IMAGE_PREFIX=${IMAGE_PREFIX:-rc16-}
 
 if [ ! -e ../bin/lb-controller ]; then
     ../scripts/build
@@ -24,9 +25,10 @@ do
     cd $dir
     provider_type=${dir%/}
     cp ../../bin/lb-controller .
-    cp -r ../../provider/${provider_type}/scripts scripts
-    cp -r ../../provider/${provider_type}/config config
-    IMAGE=${REPO}/lb-service-${provider_type}:${TAG}
+    rm -rf scripts config
+    cp -r ../../provider/${provider_type}/scripts .
+    cp -r ../../provider/${provider_type}/config .
+    IMAGE=${REPO}/${IMAGE_PREFIX}lb-service-${provider_type}:${TAG}
     docker build -t $IMAGE .
     echo ${IMAGE} >> ../../dist/images
     echo Built $IMAGE

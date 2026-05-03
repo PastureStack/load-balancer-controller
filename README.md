@@ -45,13 +45,13 @@ Refer to [kubernetes-ingress](//kubernetes.io/docs/user-guide/ingress/) and [kub
 
 # Build LB controller
 
-You can build LB controller using [Rancher dapper tool](//github.com/rancher/dapper). Just install Dapper, and run the command below from lb-controller directory:
+You can build LB controller with the local Ubuntu 26.04 builder from lb-controller directory:
 
 ```
-dapper
+make ci
 ```
 
-it would build the binaries and create an lb-controller image.
+It builds the binaries and creates the lb-controller images without pulling the legacy dapper runtime.
 
 
 # Deploy LB controller

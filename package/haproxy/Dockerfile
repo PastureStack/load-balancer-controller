@@ -2,7 +2,8 @@ FROM ubuntu:26.04 AS haproxy-builder
 
 RUN rm -f /usr/bin/pebble
 
-ARG HAPROXY_VERSION=3.3.7
+ARG HAPROXY_VERSION=3.3.8
+ARG HAPROXY_SHA256=89b1fe73d54d5990f74997da837f5fd0da1627a1baa62b26f5d358a6f3c48295
 ARG DEBIAN_FRONTEND=noninteractive
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -18,10 +19,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     zlib1g-dev && \
     rm -rf /var/lib/apt/lists/*
 
-RUN curl -sfL https://www.haproxy.org/download/3.3/src/haproxy-${HAPROXY_VERSION}.tar.gz | tar xzf - -C /tmp && \
+RUN curl -fsSL -o /tmp/haproxy.tar.gz https://www.haproxy.org/download/3.3/src/haproxy-${HAPROXY_VERSION}.tar.gz && \
+    echo "${HAPROXY_SHA256}  /tmp/haproxy.tar.gz" | sha256sum -c - && \
+    tar xzf /tmp/haproxy.tar.gz -C /tmp && \
     make -C /tmp/haproxy-${HAPROXY_VERSION} -j"$(nproc)" TARGET=linux-glibc \
       USE_OPENSSL=1 USE_PCRE2=1 USE_PCRE2_JIT=1 USE_ZLIB=1 USE_LUA=1 USE_PROMEX=1 && \
-    make -C /tmp/haproxy-${HAPROXY_VERSION} install-bin
+    make -C /tmp/haproxy-${HAPROXY_VERSION} install-bin && \
+    rm -rf /tmp/haproxy.tar.gz /tmp/haproxy-${HAPROXY_VERSION}
 
 FROM ubuntu:26.04
 
@@ -32,8 +36,8 @@ ARG DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     curl \
-    haproxy \
     jq \
+    libcrypt1 \
     liblua5.4-0 \
     libpcre2-8-0 \
     libssl3t64 \
