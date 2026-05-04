@@ -5,12 +5,18 @@ ARG GO_VERSION=1.26.2
 ARG DOCKER_VERSION=29.4.2
 ARG GO_LINUX_AMD64_SHA256=990e6b4bbba816dc3ee129eaeaf4b42f17c2800b88a2166c265ac1a200262282
 ARG GO_LINUX_ARM64_SHA256=c958a1fe1b361391db163a485e21f5f228142d6f8b584f6bef89b26f66dc5b23
+ARG UBUNTU_MIRROR=http://archive.ubuntu.com/ubuntu
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV HOST_ARCH=${DAPPER_HOST_ARCH} ARCH=${DAPPER_HOST_ARCH}
 
-RUN apt-get update && \
-    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+RUN set -eux; \
+    find /etc/apt -type f \( -name '*.list' -o -name '*.sources' \) -exec sed -i \
+        -e "s|http://security.ubuntu.com/ubuntu|${UBUNTU_MIRROR}|g" \
+        -e "s|http://archive.ubuntu.com/ubuntu|${UBUNTU_MIRROR}|g" {} +; \
+    printf 'Acquire::Retries "5";\nAcquire::http::Timeout "30";\nAcquire::https::Timeout "30";\nAcquire::http::Pipeline-Depth "0";\n' > /etc/apt/apt.conf.d/80rc16-retries; \
+    apt-get update && \
+    apt-get install -y --no-install-recommends \
         bash \
         ca-certificates \
         curl \
@@ -59,7 +65,7 @@ RUN case "${DAPPER_HOST_ARCH}" in \
 ENV DAPPER_SOURCE=/go/src/github.com/rancher/lb-controller/
 ENV DAPPER_OUTPUT="./bin ./dist"
 ENV DAPPER_DOCKER_SOCKET=true
-ENV DAPPER_ENV="TAG REPO IMAGE_NAMESPACE IMAGE_PREFIX VERSION_OVERRIDE"
+ENV DAPPER_ENV="TAG REPO IMAGE_NAMESPACE IMAGE_PREFIX VERSION_OVERRIDE DOCKER_BUILD_NETWORK UBUNTU_MIRROR"
 ENV HOME=${DAPPER_SOURCE}
 WORKDIR ${DAPPER_SOURCE}
 

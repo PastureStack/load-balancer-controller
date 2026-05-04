@@ -1,22 +1,27 @@
 FROM ubuntu:26.04 AS haproxy-builder
 
-RUN rm -f /usr/bin/pebble
-
 ARG HAPROXY_VERSION=3.3.8
 ARG HAPROXY_SHA256=89b1fe73d54d5990f74997da837f5fd0da1627a1baa62b26f5d358a6f3c48295
-ARG DEBIAN_FRONTEND=noninteractive
+ARG UBUNTU_MIRROR=http://archive.ubuntu.com/ubuntu
+ENV DEBIAN_FRONTEND=noninteractive
 
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    ca-certificates \
-    curl \
-    gcc \
-    libc6-dev \
-    libcrypt-dev \
-    liblua5.4-dev \
-    libpcre2-dev \
-    libssl-dev \
-    make \
-    zlib1g-dev && \
+RUN set -eux; \
+    find /etc/apt -type f \( -name '*.list' -o -name '*.sources' \) -exec sed -i \
+        -e "s|http://security.ubuntu.com/ubuntu|${UBUNTU_MIRROR}|g" \
+        -e "s|http://archive.ubuntu.com/ubuntu|${UBUNTU_MIRROR}|g" {} +; \
+    printf 'Acquire::Retries "5";\nAcquire::http::Timeout "30";\nAcquire::https::Timeout "30";\nAcquire::http::Pipeline-Depth "0";\n' > /etc/apt/apt.conf.d/80rc16-retries; \
+    rm -f /usr/bin/pebble && \
+    apt-get update && apt-get install -y --no-install-recommends \
+        ca-certificates \
+        curl \
+        gcc \
+        libc6-dev \
+        libcrypt-dev \
+        liblua5.4-dev \
+        libpcre2-dev \
+        libssl-dev \
+        make \
+        zlib1g-dev && \
     rm -rf /var/lib/apt/lists/*
 
 RUN curl -fsSL -o /tmp/haproxy.tar.gz https://www.haproxy.org/download/3.3/src/haproxy-${HAPROXY_VERSION}.tar.gz && \
@@ -29,26 +34,31 @@ RUN curl -fsSL -o /tmp/haproxy.tar.gz https://www.haproxy.org/download/3.3/src/h
 
 FROM ubuntu:26.04
 
-RUN rm -f /usr/bin/pebble
+ARG UBUNTU_MIRROR=http://archive.ubuntu.com/ubuntu
+ENV DEBIAN_FRONTEND=noninteractive
 
-ARG DEBIAN_FRONTEND=noninteractive
-
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    ca-certificates \
-    curl \
-    jq \
-    libcrypt1 \
-    liblua5.4-0 \
-    libpcre2-8-0 \
-    libssl3t64 \
-    logrotate \
-    openssl \
-    rsyslog \
-    tini \
-    tcpdump \
-    vim-tiny \
-    wget \
-    zlib1g && \
+RUN set -eux; \
+    find /etc/apt -type f \( -name '*.list' -o -name '*.sources' \) -exec sed -i \
+        -e "s|http://security.ubuntu.com/ubuntu|${UBUNTU_MIRROR}|g" \
+        -e "s|http://archive.ubuntu.com/ubuntu|${UBUNTU_MIRROR}|g" {} +; \
+    printf 'Acquire::Retries "5";\nAcquire::http::Timeout "30";\nAcquire::https::Timeout "30";\nAcquire::http::Pipeline-Depth "0";\n' > /etc/apt/apt.conf.d/80rc16-retries; \
+    rm -f /usr/bin/pebble && \
+    apt-get update && apt-get install -y --no-install-recommends \
+        ca-certificates \
+        curl \
+        jq \
+        libcrypt1 \
+        liblua5.4-0 \
+        libpcre2-8-0 \
+        libssl3t64 \
+        logrotate \
+        openssl \
+        rsyslog \
+        tini \
+        tcpdump \
+        vim-tiny \
+        wget \
+        zlib1g && \
     rm -rf /var/lib/apt/lists/*
 
 COPY --from=haproxy-builder /usr/local/sbin/haproxy /usr/sbin/haproxy
