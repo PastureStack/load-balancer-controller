@@ -10,4 +10,5 @@ lb-controller.tar.gz
 examples/k8singressRancherRc.yml
 /package/*/config
 /package/*/scripts
+/package/*/lb-controller
 /.idea
