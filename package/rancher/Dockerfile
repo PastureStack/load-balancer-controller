@@ -1,4 +1,4 @@
-FROM ghcr.io/chen21019/rc16-agent-base:v0.3.1
+FROM ghcr.io/chen21019/rc16-agent-base:v0.3.2
 
 RUN rm -f /usr/bin/pebble
 
