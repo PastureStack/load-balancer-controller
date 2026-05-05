@@ -1,5 +1,5 @@
 #!/bin/bash
-set -ex
+set -euo pipefail
 
 METADATA_ADDRESS=${RANCHER_METADATA_ADDRESS:-169.254.169.250}
 
@@ -9,6 +9,13 @@ while ! curl -s -f "http://${METADATA_ADDRESS}/2015-12-19/self/service/uuid"; do
     sleep 1
 done
 
-/usr/bin/update-rancher-ssl
+ssl_cert_file=$(/usr/bin/update-rancher-ssl)
+if [ -n "$ssl_cert_file" ]; then
+    export SSL_CERT_FILE="$ssl_cert_file"
+fi
 
-exec lb-controller $@
+if [ "$(id -u)" = "0" ]; then
+    exec setpriv --reuid=10001 --regid=10001 --init-groups lb-controller "$@"
+fi
+
+exec lb-controller "$@"
