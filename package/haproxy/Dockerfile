@@ -14,6 +14,7 @@ RUN set -eux; \
     apt-get update && apt-get install -y --no-install-recommends \
         ca-certificates \
         curl \
+        libcap2-bin \
         gcc \
         libc6-dev \
         libcrypt-dev \
@@ -46,6 +47,7 @@ RUN set -eux; \
     apt-get update && apt-get install -y --no-install-recommends \
         ca-certificates \
         curl \
+        libcap2-bin \
         jq \
         libcrypt1 \
         liblua5.4-0 \
@@ -63,15 +65,22 @@ RUN set -eux; \
 
 COPY --from=haproxy-builder /usr/local/sbin/haproxy /usr/sbin/haproxy
 
-RUN mkdir -p /etc/haproxy/
+RUN set -eux; \
+    groupadd --gid 10001 haproxy; \
+    useradd --uid 10001 --gid haproxy --home-dir /var/lib/haproxy --create-home --shell /usr/sbin/nologin haproxy; \
+    mkdir -p /etc/haproxy/certs/current /etc/haproxy/certs/new /var/log/haproxy /run/haproxy /var/lib/haproxy; \
+    setcap cap_net_bind_service,cap_sys_chroot=+ep /usr/sbin/haproxy; \
+    chown -R 10001:10001 /etc/haproxy /var/log/haproxy /run/haproxy /var/lib/haproxy
 
 COPY lb-controller /usr/bin/
 COPY scripts/* /usr/bin/
 COPY config/* /etc/haproxy/
 
-RUN mkdir /var/log/haproxy
-RUN touch /var/log/haproxy/traffic /var/log/haproxy/events /var/log/haproxy/errors
-RUN cat /etc/haproxy/logrotate.cfg >> /etc/logrotate.d/haproxy
+RUN chown -R 10001:10001 /etc/haproxy
+
+RUN touch /var/log/haproxy/traffic /var/log/haproxy/events /var/log/haproxy/errors && \
+    chown -R 10001:10001 /var/log/haproxy && \
+    cat /etc/haproxy/logrotate.cfg >> /etc/logrotate.d/haproxy
 
 COPY update-rancher-ssl /usr/bin/
 COPY loglevel /usr/bin/
@@ -79,9 +88,9 @@ RUN chmod +x /usr/bin/update-rancher-ssl /usr/bin/loglevel
 
 COPY lb-controller.sh /usr/bin/
 
-RUN ln -sf /proc/1/fd/1 /var/log/haproxy/events
-RUN ln -sf /proc/1/fd/1 /var/log/haproxy/traffic
-RUN ln -sf /proc/1/fd/2 /var/log/haproxy/errors
+RUN ln -sf /proc/1/fd/1 /var/log/haproxy/events && \
+    ln -sf /proc/1/fd/1 /var/log/haproxy/traffic && \
+    ln -sf /proc/1/fd/2 /var/log/haproxy/errors
 
 # So we do not write to the COW filesystem
 VOLUME /var/log/haproxy
@@ -89,3 +98,5 @@ VOLUME /var/log/haproxy
 ENTRYPOINT ["/usr/bin/tini", "-s", "--"]
 
 CMD ["lb-controller.sh", "--controller", "rancher", "--provider",  "haproxy"]
+
+USER 10001:10001

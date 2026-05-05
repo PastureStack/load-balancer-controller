@@ -28,13 +28,13 @@ func init() {
 		Config:    "/etc/haproxy/haproxy_new.cfg",
 		Template:  "/etc/haproxy/haproxy_template.cfg",
 		CertDir:   "/etc/haproxy/certs",
-		PidFile:   "/run/haproxy.pid",
+		PidFile:   "/run/haproxy/haproxy.pid",
 	}
 
 	dm := &drainMgr{
 		drainList:   make(map[string]string),
 		mu:          &sync.RWMutex{},
-		haproxySock: "/var/run/haproxy.sock",
+		haproxySock: "/run/haproxy/haproxy.sock",
 	}
 
 	lbp := Provider{
@@ -137,20 +137,20 @@ func (cfg *haproxyConfig) readPid() (string, error) {
 func (lbp *Provider) applyHaproxyConfig(lbConfig *config.LoadBalancerConfig) error {
 	// copy certificates
 	if _, err := os.Stat(lbp.cfg.CertDir); os.IsNotExist(err) {
-		if err = os.Mkdir(lbp.cfg.CertDir, 0644); err != nil {
+		if err = os.Mkdir(lbp.cfg.CertDir, 0755); err != nil {
 			return err
 		}
 	}
 	currentCerts := fmt.Sprintf("%s/%s", lbp.cfg.CertDir, "current")
 	if _, err := os.Stat(currentCerts); os.IsNotExist(err) {
-		if err = os.Mkdir(currentCerts, 0644); err != nil {
+		if err = os.Mkdir(currentCerts, 0755); err != nil {
 			return err
 		}
 	}
 
 	newCerts := fmt.Sprintf("%s/%s", lbp.cfg.CertDir, "new")
 	if _, err := os.Stat(newCerts); os.IsNotExist(err) {
-		if err = os.Mkdir(newCerts, 0644); err != nil {
+		if err = os.Mkdir(newCerts, 0755); err != nil {
 			return err
 		}
 	}

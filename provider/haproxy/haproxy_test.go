@@ -25,7 +25,7 @@ func init() {
 	dm := &drainMgr{
 		drainList:   make(map[string]string),
 		mu:          &sync.RWMutex{},
-		haproxySock: "/var/run/haproxy.sock",
+		haproxySock: "/run/haproxy/haproxy.sock",
 	}
 	dm.drainList["drainedS1"] = ""
 	lbp = Provider{

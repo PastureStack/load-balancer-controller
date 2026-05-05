@@ -1,63 +1,84 @@
 #!/bin/bash
-set -e
+set -euo pipefail
 
-reload_haproxy(){
-    # start rsyslog if not running 
-    if [[ $(pgrep rsyslog | wc -l) != 1 ]]; then
-        rm -f /run/rsyslogd.pid
-        rsyslogd -f /etc/haproxy/rsyslogd.conf > /dev/null
+config=${1:?haproxy config path required}
+action=${2:-reload}
+pidfile=${HAPROXY_PIDFILE:-/run/haproxy/haproxy.pid}
+rsyslog_pid=${HAPROXY_RSYSLOG_PIDFILE:-/run/haproxy/rsyslogd.pid}
+new_config=/etc/haproxy/haproxy_new.cfg
+cert_new=/etc/haproxy/certs/new
+cert_current=/etc/haproxy/certs/current
+
+ensure_dirs() {
+    mkdir -p "$(dirname "$pidfile")" "$cert_new" "$cert_current" /var/log/haproxy
+}
+
+ensure_rsyslog() {
+    if ! pgrep -x rsyslogd >/dev/null 2>&1; then
+        rm -f "$rsyslog_pid"
+        rsyslogd -i "$rsyslog_pid" -f /etc/haproxy/rsyslogd.conf >/dev/null
     fi
+}
 
-    if [ ! -f /run/haproxy.pid ] || [ $2 == "start" ]; then
-        if service haproxy start; then
-            return 0
-        else
-            return 1
+running_pids() {
+    [ -s "$pidfile" ] || return 0
+    while read -r pid; do
+        [ -n "$pid" ] || continue
+        if kill -0 "$pid" >/dev/null 2>&1; then
+            printf '%s\n' "$pid"
         fi
-    fi
-    # reload service
-    if service haproxy reload; then
-        return 0
-    else
-        return 1
-    fi
+    done < "$pidfile"
 }
 
-apply_config()
-{
-    # apply new config
-    if [ $2 == "start" ]; then
-        echo "starting haproxy"
-        reload_haproxy $1 $2
-    elif ! cmp -s $1 /etc/haproxy/haproxy_new.cfg  ; then
-        echo "reloading haproxy config with the new config changes"
-        reapply $1 $2
-    elif ! diff -q /etc/haproxy/certs/new /etc/haproxy/certs/current > /dev/null  2>&1; then
-        echo "reloading haproxy config with the certificates changes"
-        reapply $1 $2
-    else
-        cleanup_temp_certs
+start_or_reload_haproxy() {
+    local cfg=$1
+    ensure_dirs
+    if [ ! -s "$cfg" ]; then
+        echo "haproxy config $cfg is empty; skipping $action"
         return 0
     fi
-}
-
-reapply() {
-    copy_data $1
-    reload_haproxy $1 $2
+    haproxy -c -f "$cfg"
+    ensure_rsyslog
+    mapfile -t old_pids < <(running_pids)
+    if [ "${#old_pids[@]}" -gt 0 ]; then
+        haproxy -f "$cfg" -p "$pidfile" -sf "${old_pids[@]}"
+    else
+        haproxy -f "$cfg" -p "$pidfile"
+    fi
 }
 
 cleanup_temp_certs() {
-    rm -f /etc/haproxy/certs/new/*
+    ensure_dirs
+    rm -f "$cert_new"/*
 }
 
-copy_data()
-{
-    # copy certificates
-    rm -f /etc/haproxy/certs/current/*
-    cp -r /etc/haproxy/certs/new/. /etc/haproxy/certs/current
+copy_data() {
+    ensure_dirs
+    rm -f "$cert_current"/*
+    cp -r "$cert_new"/. "$cert_current"
     cleanup_temp_certs
-    # copy new haproxy config
-    cp -r /etc/haproxy/haproxy_new.cfg  $1
+    cp -r "$new_config" "$config"
 }
 
-apply_config $1 $2
+reapply() {
+    copy_data
+    start_or_reload_haproxy "$config"
+}
+
+apply_config() {
+    ensure_dirs
+    if [ "$action" = "start" ]; then
+        echo "starting haproxy"
+        start_or_reload_haproxy "$config"
+    elif ! cmp -s "$config" "$new_config"; then
+        echo "reloading haproxy config with the new config changes"
+        reapply
+    elif ! diff -q "$cert_new" "$cert_current" >/dev/null 2>&1; then
+        echo "reloading haproxy config with the certificates changes"
+        reapply
+    else
+        cleanup_temp_certs
+    fi
+}
+
+apply_config

@@ -23,10 +23,8 @@ func GetDefaultConfig() map[string]map[string]string {
 	global["ssl-default-server-ciphers"] = "ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES128-SHA256:ECDHE-RSA-AES128-SHA256:ECDHE-ECDSA-AES128-SHA:ECDHE-RSA-AES128-SHA:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384:ECDHE-ECDSA-AES256-SHA384:ECDHE-RSA-AES256-SHA384:ECDHE-RSA-AES256-SHA:ECDHE-ECDSA-AES256-SHA:AES128-GCM-SHA256:AES128-SHA256:AES128-SHA:AES256-GCM-SHA384:AES256-SHA256:AES256-SHA"
 	global["ssl-default-bind-options"] = "no-sslv3 no-tlsv10 no-tls-tickets"
 	global["chroot"] = "/var/lib/haproxy"
-	global["user haproxy"] = ""
-	global["group haproxy"] = ""
 	global["daemon"] = ""
-	global["stats socket"] = "/var/run/haproxy.sock mode 600 level admin"
+	global["stats socket"] = "/run/haproxy/haproxy.sock mode 600 level admin"
 	global["stats timeout"] = "2m"
 
 	defaults["mode"] = "tcp"
