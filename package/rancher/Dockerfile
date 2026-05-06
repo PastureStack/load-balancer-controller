@@ -1,4 +1,4 @@
-FROM ghcr.io/chen21019/rc16-agent-base:v0.3.2
+FROM ghcr.io/chen21019/rc16-agent-base:v0.3.3
 
 ARG UBUNTU_MIRROR=http://archive.ubuntu.com/ubuntu
 ENV DEBIAN_FRONTEND=noninteractive
