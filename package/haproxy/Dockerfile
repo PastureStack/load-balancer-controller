@@ -36,7 +36,13 @@ RUN curl -fsSL -o /tmp/haproxy.tar.gz https://www.haproxy.org/download/3.3/src/h
 FROM ubuntu:26.04
 
 ARG UBUNTU_MIRROR=http://archive.ubuntu.com/ubuntu
+ARG RC16_IMAGE_VERSION=dev
 ENV DEBIAN_FRONTEND=noninteractive
+
+LABEL org.opencontainers.image.source="https://github.com/chen21019/rancher-1.6-lb-controller" \
+      org.opencontainers.image.description="Unofficial Rancher 1.6 maintenance HAProxy load balancer image." \
+      org.opencontainers.image.licenses="Apache-2.0" \
+      org.opencontainers.image.version="${RC16_IMAGE_VERSION}"
 
 RUN set -eux; \
     find /etc/apt -type f \( -name '*.list' -o -name '*.sources' \) -exec sed -i \

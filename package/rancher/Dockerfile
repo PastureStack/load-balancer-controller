@@ -1,7 +1,13 @@
-FROM ghcr.io/chen21019/rc16-agent-base:v0.3.3
+FROM ghcr.io/chen21019/rc16-agent-base:v0.3.4
 
 ARG UBUNTU_MIRROR=http://archive.ubuntu.com/ubuntu
+ARG RC16_IMAGE_VERSION=dev
 ENV DEBIAN_FRONTEND=noninteractive
+
+LABEL org.opencontainers.image.source="https://github.com/chen21019/rancher-1.6-lb-controller" \
+      org.opencontainers.image.description="Unofficial Rancher 1.6 maintenance Rancher LB controller sidecar image." \
+      org.opencontainers.image.licenses="Apache-2.0" \
+      org.opencontainers.image.version="${RC16_IMAGE_VERSION}"
 
 RUN set -eux; \
     find /etc/apt -type f \( -name '*.list' -o -name '*.sources' \) -exec sed -i \
