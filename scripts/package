@@ -32,6 +32,7 @@ do
     DOCKER_BUILDKIT="${DOCKER_BUILDKIT:-0}" docker build \
         --network "${DOCKER_BUILD_NETWORK:-host}" \
         --build-arg UBUNTU_MIRROR="${UBUNTU_MIRROR:-http://archive.ubuntu.com/ubuntu}" \
+        --build-arg RC16_IMAGE_VERSION="${TAG}" \
         -t "${IMAGE}" .
     echo ${IMAGE} >> ../../dist/images
     echo Built ${IMAGE}
