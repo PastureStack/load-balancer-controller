@@ -1,7 +1,7 @@
 FROM ubuntu:26.04 AS haproxy-builder
 
-ARG HAPROXY_VERSION=3.3.8
-ARG HAPROXY_SHA256=89b1fe73d54d5990f74997da837f5fd0da1627a1baa62b26f5d358a6f3c48295
+ARG HAPROXY_VERSION=3.3.10
+ARG HAPROXY_SHA256=6aa919a13f3a575416ef0ae45da0ecb35f1a8d004641dd684fe9b53e646891f2
 ARG UBUNTU_MIRROR=http://archive.ubuntu.com/ubuntu
 ENV DEBIAN_FRONTEND=noninteractive
 
@@ -31,6 +31,8 @@ RUN curl -fsSL -o /tmp/haproxy.tar.gz https://www.haproxy.org/download/3.3/src/h
     make -C /tmp/haproxy-${HAPROXY_VERSION} -j"$(nproc)" TARGET=linux-glibc \
       USE_OPENSSL=1 USE_PCRE2=1 USE_PCRE2_JIT=1 USE_ZLIB=1 USE_LUA=1 USE_PROMEX=1 && \
     make -C /tmp/haproxy-${HAPROXY_VERSION} install-bin && \
+    mkdir -p /usr/local/share/haproxy/errors && \
+    cp -a /tmp/haproxy-${HAPROXY_VERSION}/examples/errorfiles/*.http /usr/local/share/haproxy/errors/ && \
     rm -rf /tmp/haproxy.tar.gz /tmp/haproxy-${HAPROXY_VERSION}
 
 FROM ubuntu:26.04
@@ -70,6 +72,7 @@ RUN set -eux; \
     rm -rf /var/lib/apt/lists/*
 
 COPY --from=haproxy-builder /usr/local/sbin/haproxy /usr/sbin/haproxy
+COPY --from=haproxy-builder /usr/local/share/haproxy/errors /etc/haproxy/errors
 
 RUN set -eux; \
     groupadd --gid 10001 haproxy; \
@@ -82,7 +85,11 @@ COPY lb-controller /usr/bin/
 COPY scripts/* /usr/bin/
 COPY config/* /etc/haproxy/
 
-RUN chown -R 10001:10001 /etc/haproxy
+RUN set -eux; \
+    for code in 400 403 408 500 502 503 504; do \
+        test -s "/etc/haproxy/errors/${code}.http"; \
+    done; \
+    chown -R 10001:10001 /etc/haproxy
 
 RUN touch /var/log/haproxy/traffic /var/log/haproxy/events /var/log/haproxy/errors && \
     chown -R 10001:10001 /var/log/haproxy && \
