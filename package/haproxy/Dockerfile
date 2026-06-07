@@ -25,7 +25,8 @@ RUN set -eux; \
         zlib1g-dev && \
     rm -rf /var/lib/apt/lists/*
 
-RUN curl -fsSL -o /tmp/haproxy.tar.gz https://www.haproxy.org/download/3.3/src/haproxy-${HAPROXY_VERSION}.tar.gz && \
+RUN curl -fsSL --retry 5 --retry-all-errors --retry-delay 2 --connect-timeout 10 --max-time 300 \
+        -o /tmp/haproxy.tar.gz https://www.haproxy.org/download/3.3/src/haproxy-${HAPROXY_VERSION}.tar.gz && \
     echo "${HAPROXY_SHA256}  /tmp/haproxy.tar.gz" | sha256sum -c - && \
     tar xzf /tmp/haproxy.tar.gz -C /tmp && \
     make -C /tmp/haproxy-${HAPROXY_VERSION} -j"$(nproc)" TARGET=linux-glibc \

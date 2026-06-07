@@ -3,7 +3,7 @@ TARGETS := $(shell ls scripts)
 
 DAPPER_IMAGE ?= rc16-lb-controller-dapper:ubuntu26
 DAPPER_HOST_ARCH ?= amd64
-DOCKER_VERSION ?= 29.4.2
+DOCKER_VERSION ?= 29.5.3
 DOCKER_BUILD_NETWORK ?= host
 UBUNTU_MIRROR ?= http://archive.ubuntu.com/ubuntu
 DAPPER_SOURCE ?= /go/src/github.com/rancher/lb-controller

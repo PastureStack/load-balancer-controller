@@ -2,7 +2,7 @@ FROM ubuntu:26.04
 
 ARG DAPPER_HOST_ARCH=amd64
 ARG GO_VERSION=1.26.4
-ARG DOCKER_VERSION=29.4.2
+ARG DOCKER_VERSION=29.5.3
 ARG GO_LINUX_AMD64_SHA256=1153d3d50e0ac764b447adfe05c2bcf08e889d42a02e0fe0259bd47f6733ad7f
 ARG GO_LINUX_ARM64_SHA256=ef758ae7c6cf9267c9c0ef080b8965f453d89ab2d25d9eb22de4405925238768
 ARG UBUNTU_MIRROR=http://archive.ubuntu.com/ubuntu
@@ -46,7 +46,8 @@ RUN case "${DAPPER_HOST_ARCH}" in \
         arm64) go_arch=arm64; go_sha="${GO_LINUX_ARM64_SHA256}" ;; \
         *) echo "unsupported DAPPER_HOST_ARCH=${DAPPER_HOST_ARCH}" >&2; exit 1 ;; \
     esac && \
-    curl -fsSL -o /tmp/go.tgz "https://go.dev/dl/go${GO_VERSION}.linux-${go_arch}.tar.gz" && \
+    curl -fsSL --retry 5 --retry-all-errors --retry-delay 2 --connect-timeout 10 --max-time 300 \
+        -o /tmp/go.tgz "https://go.dev/dl/go${GO_VERSION}.linux-${go_arch}.tar.gz" && \
     echo "${go_sha}  /tmp/go.tgz" | sha256sum -c - && \
     tar -xzf /tmp/go.tgz -C /usr/local && \
     rm -f /tmp/go.tgz && \
@@ -57,8 +58,11 @@ RUN case "${DAPPER_HOST_ARCH}" in \
         arm64) docker_arch=aarch64 ;; \
         *) echo "unsupported DAPPER_HOST_ARCH=${DAPPER_HOST_ARCH}" >&2; exit 1 ;; \
     esac && \
-    curl -fsSL "https://download.docker.com/linux/static/stable/${docker_arch}/docker-${DOCKER_VERSION}.tgz" | \
-        tar xzf - -C /usr/bin --strip-components=1 docker/docker && \
+    docker_tgz=/tmp/docker.tgz && \
+    curl -fsSL --retry 5 --retry-all-errors --retry-delay 2 --connect-timeout 10 --max-time 300 \
+        -o "$docker_tgz" "https://download.docker.com/linux/static/stable/${docker_arch}/docker-${DOCKER_VERSION}.tgz" && \
+    tar xzf "$docker_tgz" -C /usr/bin --strip-components=1 docker/docker && \
+    rm -f "$docker_tgz" && \
     chmod +x /usr/bin/docker && \
     docker --version
 
