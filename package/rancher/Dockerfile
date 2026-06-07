@@ -1,4 +1,4 @@
-FROM ghcr.io/chen21019/rc16-agent-base:v0.3.4
+FROM ghcr.io/chen21019/rc16-agent-base:v0.3.5
 
 ARG UBUNTU_MIRROR=http://archive.ubuntu.com/ubuntu
 ARG RC16_IMAGE_VERSION=dev
