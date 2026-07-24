@@ -163,9 +163,9 @@ func (fetcher *RCertificateFetcher) UpdateEndpoints(lbSvc *metadata.Service, eps
 
 	toUpdate := make(map[string]interface{})
 	toUpdate["publicEndpoints"] = eps
-	log.Infof("Updating Rancher LB [%s] in stack [%s] with the new public endpoints [%v] ", lbSvc.Name, lbSvc.StackName, eps)
+	log.Infof("Updating load balancer [%s] in stack [%s] with the new public endpoints [%v] ", lbSvc.Name, lbSvc.StackName, eps)
 	if _, err := fetcher.Client.LoadBalancerService.Update(&lb, toUpdate); err != nil {
-		return fmt.Errorf("failed to update Rancher LB [%s] in stack [%s]. Error: %#v", lbSvc.Name, lbSvc.StackName, err)
+		return fmt.Errorf("failed to update load balancer [%s] in stack [%s]. Error: %#v", lbSvc.Name, lbSvc.StackName, err)
 	}
 	return nil
 }

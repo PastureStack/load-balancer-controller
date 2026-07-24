@@ -11,8 +11,9 @@ cd $(dirname $0)/../package
 mkdir -p ../dist
 
 TAG=${TAG:-${VERSION}${SUFFIX}}
-REPO=${REPO:-ghcr.io/chen21019}
-IMAGE_PREFIX=${IMAGE_PREFIX:-rc16-}
+REPO=${REPO:-ghcr.io/pasturestack}
+IMAGE_PREFIX=${IMAGE_PREFIX:-}
+SOURCE_REVISION=${SOURCE_REVISION:-$(git rev-parse HEAD)}
 
 if [ ! -e ../bin/lb-controller ]; then
     ../scripts/build
@@ -28,11 +29,17 @@ do
     rm -rf scripts config
     cp -r ../../provider/${provider_type}/scripts .
     cp -r ../../provider/${provider_type}/config .
-    IMAGE=${REPO}/${IMAGE_PREFIX}lb-service-${provider_type}:${TAG}
+    case "${provider_type}" in
+        haproxy) image_name=load-balancer-service ;;
+        rancher) image_name=load-balancer-controller-sidecar ;;
+        *) image_name=load-balancer-service-${provider_type} ;;
+    esac
+    IMAGE=${REPO}/${IMAGE_PREFIX}${image_name}:${TAG}
     DOCKER_BUILDKIT="${DOCKER_BUILDKIT:-0}" docker build \
         --network "${DOCKER_BUILD_NETWORK:-host}" \
         --build-arg UBUNTU_MIRROR="${UBUNTU_MIRROR:-http://archive.ubuntu.com/ubuntu}" \
         --build-arg RC16_IMAGE_VERSION="${TAG}" \
+        --build-arg SOURCE_REVISION="${SOURCE_REVISION}" \
         -t "${IMAGE}" .
     echo ${IMAGE} >> ../../dist/images
     echo Built ${IMAGE}

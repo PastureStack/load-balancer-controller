@@ -27,7 +27,7 @@ var (
 func main() {
 	logserver.StartServerWithDefaults()
 
-	if os.Getenv("RANCHER_DEBUG") == "true" {
+	if os.Getenv("PASTURESTACK_DEBUG") == "true" || os.Getenv("RANCHER_DEBUG") == "true" {
 		log.SetLevelString("debug")
 	}
 	app := cli.NewApp()
@@ -44,14 +44,14 @@ func main() {
 			Usage: "Provider plugin name",
 		}, cli.StringFlag{
 			Name:   "metadata-address",
-			EnvVar: "RANCHER_METADATA_ADDRESS",
+			EnvVar: "PASTURESTACK_METADATA_ADDRESS,RANCHER_METADATA_ADDRESS",
 			Value:  "169.254.169.250",
-			Usage:  "Rancher metadata address",
+			Usage:  "PastureStack metadata compatibility address",
 		},
 	}
 
 	app.Action = func(c *cli.Context) error {
-		log.Infof("Starting Rancher LB service")
+		log.Infof("Starting PastureStack load-balancer service")
 		lbControllerName = c.String("controller")
 		lbProviderName = c.String("provider")
 		metadataAddress = c.String("metadata-address")

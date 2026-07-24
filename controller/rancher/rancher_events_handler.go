@@ -53,7 +53,7 @@ func (ehandler *REventsHandler) Subscribe() error {
 }
 
 func (ehandler *REventsHandler) handle(event *revents.Event, cli *client.RancherClient) error {
-	log.Debugf("Rancher event: %#v eventName=%v eventID=%v resourceID=%v", event, event.Name, event.ID, event.ResourceID)
+	log.Debugf("Control-plane event: %#v eventName=%v eventID=%v resourceID=%v", event, event.Name, event.ID, event.ResourceID)
 
 	if event.Name == "target.drain" {
 		sendReply, err := ehandler.HandleDrainEvent(event, cli)

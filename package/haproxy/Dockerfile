@@ -40,12 +40,14 @@ FROM ubuntu:26.04
 
 ARG UBUNTU_MIRROR=http://archive.ubuntu.com/ubuntu
 ARG RC16_IMAGE_VERSION=dev
+ARG SOURCE_REVISION=unknown
 ENV DEBIAN_FRONTEND=noninteractive
 
-LABEL org.opencontainers.image.source="https://github.com/chen21019/rancher-1.6-lb-controller" \
-      org.opencontainers.image.description="Unofficial Rancher 1.6 maintenance HAProxy load balancer image." \
+LABEL org.opencontainers.image.source="https://github.com/PastureStack/load-balancer-controller" \
+      org.opencontainers.image.description="PastureStack HAProxy load-balancer service compatibility image." \
       org.opencontainers.image.licenses="Apache-2.0" \
-      org.opencontainers.image.version="${RC16_IMAGE_VERSION}"
+      org.opencontainers.image.version="${RC16_IMAGE_VERSION}" \
+      org.opencontainers.image.revision="${SOURCE_REVISION}"
 
 RUN set -eux; \
     find /etc/apt -type f \( -name '*.list' -o -name '*.sources' \) -exec sed -i \
@@ -87,9 +89,14 @@ COPY scripts/* /usr/bin/
 COPY config/* /etc/haproxy/
 
 RUN set -eux; \
+    install -o root -g root -m 0644 \
+        /etc/haproxy/rsyslogd.conf \
+        /etc/rsyslog.d/49-pasturestack-haproxy.conf; \
+    rm -f /etc/haproxy/rsyslogd.conf; \
     for code in 400 403 408 500 502 503 504; do \
         test -s "/etc/haproxy/errors/${code}.http"; \
     done; \
+    test -r /etc/rsyslog.d/49-pasturestack-haproxy.conf; \
     chown -R 10001:10001 /etc/haproxy
 
 RUN touch /var/log/haproxy/traffic /var/log/haproxy/events /var/log/haproxy/errors && \

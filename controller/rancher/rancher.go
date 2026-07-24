@@ -33,27 +33,29 @@ func init() {
 func (lbc *LoadBalancerController) Init(metadataURL string) {
 	cattleURL := os.Getenv("CATTLE_URL")
 	if len(cattleURL) == 0 {
-		log.Fatalf("CATTLE_URL is not set, fail to init Rancher LB provider")
+		log.Fatalf("CATTLE_URL is not set, unable to initialize PastureStack load-balancer controller")
 	}
 
-	cattleEnvAdminAccessKey := os.Getenv("CATTLE_ENVIRONMENT_ADMIN_ACCESS_KEY")
+	cattleEnvAdminAccessKey := firstCredential(
+		"CATTLE_ENVIRONMENT_ADMIN_ACCESS_KEY", "CATTLE_ACCESS_KEY")
 	if len(cattleEnvAdminAccessKey) == 0 {
-		log.Fatalf("CATTLE_ENVIRONMENT_ADMIN_ACCESS_KEY is not set, fail to init of Rancher LB provider")
+		log.Fatalf("CATTLE_ENVIRONMENT_ADMIN_ACCESS_KEY and CATTLE_ACCESS_KEY are not set, unable to initialize PastureStack load-balancer controller")
 	}
 
-	cattleEnvAdminSecretKey := os.Getenv("CATTLE_ENVIRONMENT_ADMIN_SECRET_KEY")
+	cattleEnvAdminSecretKey := firstCredential(
+		"CATTLE_ENVIRONMENT_ADMIN_SECRET_KEY", "CATTLE_SECRET_KEY")
 	if len(cattleEnvAdminSecretKey) == 0 {
-		log.Fatalf("CATTLE_ENVIRONMENT_ADMIN_SECRET_KEY is not set, fail to init of Rancher LB provider")
+		log.Fatalf("CATTLE_ENVIRONMENT_ADMIN_SECRET_KEY and CATTLE_SECRET_KEY are not set, unable to initialize PastureStack load-balancer controller")
 	}
 
-	cattleAgentAccessKey := os.Getenv("CATTLE_AGENT_ACCESS_KEY")
+	cattleAgentAccessKey := firstCredential("CATTLE_AGENT_ACCESS_KEY", "CATTLE_ACCESS_KEY")
 	if len(cattleAgentAccessKey) == 0 {
-		log.Fatalf("CATTLE_AGENT_ACCESS_KEY is not set, fail to init of Rancher LB provider")
+		log.Fatalf("CATTLE_AGENT_ACCESS_KEY and CATTLE_ACCESS_KEY are not set, unable to initialize PastureStack load-balancer controller")
 	}
 
-	cattleAgentSecretKey := os.Getenv("CATTLE_AGENT_SECRET_KEY")
+	cattleAgentSecretKey := firstCredential("CATTLE_AGENT_SECRET_KEY", "CATTLE_SECRET_KEY")
 	if len(cattleAgentSecretKey) == 0 {
-		log.Fatalf("CATTLE_AGENT_SECRET_KEY is not set, fail to init of Rancher LB provider")
+		log.Fatalf("CATTLE_AGENT_SECRET_KEY and CATTLE_SECRET_KEY are not set, unable to initialize PastureStack load-balancer controller")
 	}
 
 	pollIntervalStr := os.Getenv("CERTS_POLL_INTERVAL")
@@ -88,7 +90,7 @@ func (lbc *LoadBalancerController) Init(metadataURL string) {
 
 	client, err := client.NewRancherClient(opts)
 	if err != nil {
-		log.Fatalf("Failed to create Rancher client %v", err)
+		log.Fatalf("Failed to create control-plane client %v", err)
 	}
 
 	pollInterval, err := strconv.Atoi(pollIntervalStr)
@@ -143,6 +145,13 @@ func (lbc *LoadBalancerController) Init(metadataURL string) {
 	}
 	lbc.EventsHandler = eHandler
 
+}
+
+func firstCredential(primaryName, compatibilityName string) string {
+	if value := os.Getenv(primaryName); value != "" {
+		return value
+	}
+	return os.Getenv(compatibilityName)
 }
 
 type LoadBalancerController struct {

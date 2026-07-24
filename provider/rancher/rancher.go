@@ -42,19 +42,19 @@ type LBProvider struct {
 func init() {
 	cattleURL := os.Getenv("CATTLE_URL")
 	if len(cattleURL) == 0 {
-		log.Info("CATTLE_URL is not set, skipping init of Rancher LB provider")
+		log.Info("CATTLE_URL is not set, skipping control-plane load-balancer provider")
 		return
 	}
 
 	cattleAccessKey := os.Getenv("CATTLE_ACCESS_KEY")
 	if len(cattleAccessKey) == 0 {
-		log.Info("CATTLE_ACCESS_KEY is not set, skipping init of Rancher LB provider")
+		log.Info("CATTLE_ACCESS_KEY is not set, skipping control-plane load-balancer provider")
 		return
 	}
 
 	cattleSecretKey := os.Getenv("CATTLE_SECRET_KEY")
 	if len(cattleSecretKey) == 0 {
-		log.Info("CATTLE_SECRET_KEY is not set, skipping init of Rancher LB provider")
+		log.Info("CATTLE_SECRET_KEY is not set, skipping control-plane load-balancer provider")
 		return
 	}
 
@@ -75,7 +75,7 @@ func init() {
 	client, err := client.NewRancherClient(opts)
 
 	if err != nil {
-		log.Fatalf("Failed to create Rancher client %v", err)
+		log.Fatalf("Failed to create control-plane client %v", err)
 	}
 
 	lbp := &LBProvider{
@@ -90,7 +90,7 @@ func init() {
 func (lbp *LBProvider) IsHealthy() bool {
 	_, err := lbp.client.Stack.List(client.NewListOpts())
 	if err != nil {
-		log.Errorf("Health check failed: unable to reach Rancher. Error: %#v", err)
+		log.Errorf("Health check failed: unable to reach control plane. Error: %#v", err)
 		return false
 	}
 	return true
@@ -416,7 +416,7 @@ func (lbp *LBProvider) getRancherLbConfig(lbConfig *config.LoadBalancerConfig, l
 				return nil, err
 			}
 			if svc == nil {
-				return nil, fmt.Errorf("failed to find service [%s] in Rancher", bcknd.UUID)
+				return nil, fmt.Errorf("failed to find service [%s] in control plane", bcknd.UUID)
 			}
 			portRule := client.PortRule{
 				ServiceId:  svc.Id,
@@ -495,7 +495,7 @@ func (lbp *LBProvider) updateRancherLBService(lbConfig *config.LoadBalancerConfi
 	if update {
 		toUpdate := make(map[string]interface{})
 		toUpdate["lbConfig"] = updatedConfig
-		log.Infof("Updating Rancher LB with the new lbConfig [%v] ", updatedConfig)
+		log.Infof("Updating load balancer with the new configuration [%v] ", updatedConfig)
 		if _, err = lbp.client.LoadBalancerService.Update(lb, toUpdate); err != nil {
 			return fmt.Errorf("failed to update lb [%s]. Error: %#v", lb.Name, err)
 		}

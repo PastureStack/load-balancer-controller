@@ -4,7 +4,8 @@ set -euo pipefail
 config=${1:?haproxy config path required}
 action=${2:-reload}
 pidfile=${HAPROXY_PIDFILE:-/run/haproxy/haproxy.pid}
-rsyslog_pid=${HAPROXY_RSYSLOG_PIDFILE:-/run/haproxy/rsyslogd.pid}
+rsyslog_pid=${HAPROXY_RSYSLOG_PIDFILE:-NONE}
+rsyslog_config=${HAPROXY_RSYSLOG_CONFIG:-/etc/rsyslog.d/49-pasturestack-haproxy.conf}
 new_config=/etc/haproxy/haproxy_new.cfg
 cert_new=/etc/haproxy/certs/new
 cert_current=/etc/haproxy/certs/current
@@ -15,8 +16,10 @@ ensure_dirs() {
 
 ensure_rsyslog() {
     if ! pgrep -x rsyslogd >/dev/null 2>&1; then
-        rm -f "$rsyslog_pid"
-        rsyslogd -i "$rsyslog_pid" -f /etc/haproxy/rsyslogd.conf >/dev/null
+        if [ "$rsyslog_pid" != NONE ]; then
+            rm -f "$rsyslog_pid"
+        fi
+        rsyslogd -i "$rsyslog_pid" -f "$rsyslog_config" >/dev/null
     fi
 }
 
