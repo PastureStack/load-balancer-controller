@@ -1,0 +1,178 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+
+permissions:
+  contents: write
+  packages: write
+  id-token: write
+  attestations: write
+
+concurrency:
+  group: load-balancer-controller-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    env:
+      DAPPER_IMAGE: pasturestack/load-balancer-controller-dapper:${{ github.sha }}
+      SERVICE_NAME: ghcr.io/pasturestack/load-balancer-service
+      SIDECAR_NAME: ghcr.io/pasturestack/load-balancer-controller-sidecar
+      SERVICE_IMAGE: ghcr.io/pasturestack/load-balancer-service:v0.9.27
+      SIDECAR_IMAGE: ghcr.io/pasturestack/load-balancer-controller-sidecar:v0.9.27
+      TRIVY_IMAGE: ghcr.io/aquasecurity/trivy:0.74.0@sha256:62b1e65e8869bc4b4c6aa4fa2b21595256c7c2f6018a9d9ad61caf87187c1969
+      VERSION_OVERRIDE: v0.9.27
+    steps:
+      - name: Check out immutable tag
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Verify release identity and source shape
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF_TYPE" = 'tag'
+          test "$GITHUB_REF_NAME" = 'v0.9.27'
+          test -z "$(git status --porcelain)"
+          test "$(git rev-parse HEAD)" = "$(git rev-list -n 1 v0.9.27)"
+          git merge-base --is-ancestor b75f773f0e643d99124fc8146b92bb5431e625a6 HEAD
+          test "$(git rev-list --count b75f773f0e643d99124fc8146b92bb5431e625a6..HEAD)" -eq 1
+          ./scripts/vendor-lock-test
+          ./scripts/vendor-licenses-test
+          ./scripts/supply-chain-check-test
+          ./scripts/log-safety-test
+          ./scripts/source-sbom-test
+
+      - name: Build and test release from source
+        shell: bash
+        run: |
+          set -euo pipefail
+          source_epoch="$(git show -s --format=%ct HEAD)"
+          VERSION_OVERRIDE="$VERSION_OVERRIDE" TAG="$VERSION_OVERRIDE" \
+            REPO=ghcr.io/pasturestack SOURCE_DATE_EPOCH="$source_epoch" \
+            make DAPPER_IMAGE="$DAPPER_IMAGE" ci
+          expected_owner="$(id -u):$(id -g)"
+          test "$(stat -c '%u:%g' bin/lb-controller)" = "$expected_owner"
+          test "$(stat -c '%u:%g' dist/images)" = "$expected_owner"
+          test ! -e .docker
+          mapfile -t images < dist/images
+          test "${#images[@]}" -eq 2
+          printf '%s\n' "${images[@]}" | LC_ALL=C sort > dist/runtime-images.txt
+          grep -Fxq "$SERVICE_IMAGE" dist/runtime-images.txt
+          grep -Fxq "$SIDECAR_IMAGE" dist/runtime-images.txt
+
+      - name: Create reproducible release bundle and SBOMs
+        shell: bash
+        run: |
+          set -euo pipefail
+          source_epoch="$(git show -s --format=%ct HEAD)"
+          release_root='dist/release/load-balancer-controller-0.9.27-linux-amd64'
+          mkdir -p "$release_root"
+          cp bin/lb-controller LICENSE ORIGIN.md "$release_root/"
+          ./scripts/vendor-licenses "$release_root/third-party-licenses"
+          python3 scripts/source-sbom dist/release/load-balancer-controller-0.9.27-source.cdx.json
+          python3 scripts/generate-openvex \
+            > dist/release/load-balancer-controller-0.9.27.openvex.json
+          cp dist/release/load-balancer-controller-0.9.27.openvex.json \
+            "$release_root/SECURITY-VEX.json"
+          docker pull "$TRIVY_IMAGE"
+          cache="$RUNNER_TEMP/trivy-cache"
+          mkdir -p "$cache"
+          docker run --rm -v "$cache:/root/.cache/trivy" "$TRIVY_IMAGE" image --download-db-only
+          for scope_and_image in \
+            "service|$SERVICE_IMAGE" \
+            "sidecar|$SIDECAR_IMAGE"; do
+            scope="${scope_and_image%%|*}"
+            image="${scope_and_image#*|}"
+            docker run --rm -v /var/run/docker.sock:/var/run/docker.sock \
+              -v "$PWD:/work" -w /work -v "$cache:/root/.cache/trivy" "$TRIVY_IMAGE" image \
+              --skip-db-update --offline-scan --format cyclonedx \
+              --output "/work/dist/release/load-balancer-controller-0.9.27-${scope}.cdx.json" "$image"
+          done
+          find "$release_root" -exec touch -h -d "@${source_epoch}" {} +
+          tar --sort=name --mtime="@${source_epoch}" --owner=0 --group=0 --numeric-owner \
+            -C dist/release -cJf dist/release/load-balancer-controller-0.9.27-linux-amd64.tar.xz \
+            load-balancer-controller-0.9.27-linux-amd64
+          (
+            cd dist/release
+            sha256sum \
+              load-balancer-controller-0.9.27-linux-amd64.tar.xz \
+              load-balancer-controller-0.9.27-source.cdx.json \
+              load-balancer-controller-0.9.27-service.cdx.json \
+              load-balancer-controller-0.9.27-sidecar.cdx.json \
+              load-balancer-controller-0.9.27.openvex.json \
+              > SHA256SUMS
+          )
+
+      - name: Publish immutable container images
+        id: publish
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          printf '%s' "$GH_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+          docker push "$SERVICE_IMAGE"
+          docker push "$SIDECAR_IMAGE"
+          service_ref="$(docker image inspect --format '{{index .RepoDigests 0}}' "$SERVICE_IMAGE")"
+          sidecar_ref="$(docker image inspect --format '{{index .RepoDigests 0}}' "$SIDECAR_IMAGE")"
+          service_digest="${service_ref#*@}"
+          sidecar_digest="${sidecar_ref#*@}"
+          [[ "$service_digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+          [[ "$sidecar_digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+          printf 'service_digest=%s\n' "$service_digest" >> "$GITHUB_OUTPUT"
+          printf 'sidecar_digest=%s\n' "$sidecar_digest" >> "$GITHUB_OUTPUT"
+
+      - name: Attest release assets
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-checksums: dist/release/SHA256SUMS
+
+      - name: Attest load-balancer service image
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-name: ${{ env.SERVICE_NAME }}
+          subject-digest: ${{ steps.publish.outputs.service_digest }}
+          push-to-registry: true
+
+      - name: Attest controller sidecar image
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-name: ${{ env.SIDECAR_NAME }}
+          subject-digest: ${{ steps.publish.outputs.sidecar_digest }}
+          push-to-registry: true
+
+      - name: Publish GitHub release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh release create "$GITHUB_REF_NAME" \
+            --repo "$GITHUB_REPOSITORY" \
+            --verify-tag \
+            --title 'Load Balancer Controller 0.9.27' \
+            --notes 'Security and supply-chain maintenance release. Includes checksum-pinned build inputs, complete vendored-source locks, legal attribution, source and runtime CycloneDX SBOMs, exact OpenVEX applicability evidence, and signed build provenance.' \
+            dist/release/load-balancer-controller-0.9.27-linux-amd64.tar.xz \
+            dist/release/load-balancer-controller-0.9.27-source.cdx.json \
+            dist/release/load-balancer-controller-0.9.27-service.cdx.json \
+            dist/release/load-balancer-controller-0.9.27-sidecar.cdx.json \
+            dist/release/load-balancer-controller-0.9.27.openvex.json \
+            dist/release/SHA256SUMS
+
+      - name: Clean runner resources
+        if: always()
+        shell: bash
+        run: |
+          set +e
+          docker logout ghcr.io >/dev/null 2>&1
+          docker image rm -f "$DAPPER_IMAGE" "$SERVICE_IMAGE" "$SIDECAR_IMAGE" "$TRIVY_IMAGE" 2>/dev/null
+          docker builder prune --all --force >/dev/null 2>&1
+          sudo rm -rf bin dist

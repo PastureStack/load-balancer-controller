@@ -1,0 +1,309 @@
+#!/usr/bin/env python3
+import csv
+import json
+import pathlib
+import re
+import sys
+import urllib.parse
+
+
+ROOT = pathlib.Path(__file__).resolve().parent.parent
+
+
+def read_tsv(path):
+    with path.open(encoding="utf-8-sig", newline="") as stream:
+        return list(csv.DictReader(stream, delimiter="\t"))
+
+
+def property_entry(name, value):
+    return {"name": name, "value": value}
+
+
+LICENSE_NAMES = {
+    "license",
+    "license.txt",
+    "license.md",
+    "licence",
+    "licence.txt",
+    "licence.md",
+    "copying",
+    "copying.txt",
+    "copying.md",
+    "notice",
+    "notice.txt",
+    "notice.md",
+    "copyright",
+    "copyright.txt",
+    "copyright.md",
+    "authors",
+    "authors.txt",
+    "authors.md",
+}
+
+APT_LOCK_PATHS = (
+    ROOT / "ubuntu-apt.lock",
+    ROOT / "package" / "haproxy" / "ubuntu-apt.lock",
+    ROOT / "package" / "rancher" / "ubuntu-apt.lock",
+)
+APT_LOCK_PATTERN = re.compile(
+    r"^(UBUNTU_APT_[A-Z0-9_]+)='([A-Za-z0-9.+:~_-]+)'$"
+)
+APT_PACKAGE_NAMES = {
+    "UBUNTU_APT_BASH_VERSION": "bash",
+    "UBUNTU_APT_CA_CERTIFICATES_VERSION": "ca-certificates",
+    "UBUNTU_APT_CURL_VERSION": "curl",
+    "UBUNTU_APT_FILE_VERSION": "file",
+    "UBUNTU_APT_GCC_VERSION": "gcc",
+    "UBUNTU_APT_GIT_VERSION": "git",
+    "UBUNTU_APT_JQ_VERSION": "jq",
+    "UBUNTU_APT_LIBC6_DEV_VERSION": "libc6-dev",
+    "UBUNTU_APT_LIBCAP2_BIN_VERSION": "libcap2-bin",
+    "UBUNTU_APT_LIBCRYPT1_VERSION": "libcrypt1",
+    "UBUNTU_APT_LIBCRYPT_DEV_VERSION": "libcrypt-dev",
+    "UBUNTU_APT_LIBLUA5_4_0_VERSION": "liblua5.4-0",
+    "UBUNTU_APT_LIBLUA5_4_DEV_VERSION": "liblua5.4-dev",
+    "UBUNTU_APT_LIBPCRE2_8_0_VERSION": "libpcre2-8-0",
+    "UBUNTU_APT_LIBPCRE2_DEV_VERSION": "libpcre2-dev",
+    "UBUNTU_APT_LIBSSL3T64_VERSION": "libssl3t64",
+    "UBUNTU_APT_LIBSSL_DEV_VERSION": "libssl-dev",
+    "UBUNTU_APT_LOGROTATE_VERSION": "logrotate",
+    "UBUNTU_APT_MAKE_VERSION": "make",
+    "UBUNTU_APT_OPENSSL_VERSION": "openssl",
+    "UBUNTU_APT_PYTHON3_VERSION": "python3",
+    "UBUNTU_APT_RSYSLOG_VERSION": "rsyslog",
+    "UBUNTU_APT_TAR_VERSION": "tar",
+    "UBUNTU_APT_TCPDUMP_VERSION": "tcpdump",
+    "UBUNTU_APT_TINI_VERSION": "tini",
+    "UBUNTU_APT_UNZIP_VERSION": "unzip",
+    "UBUNTU_APT_VIM_TINY_VERSION": "vim-tiny",
+    "UBUNTU_APT_WGET_VERSION": "wget",
+    "UBUNTU_APT_XZ_UTILS_VERSION": "xz-utils",
+    "UBUNTU_APT_ZLIB1G_VERSION": "zlib1g",
+    "UBUNTU_APT_ZLIB1G_DEV_VERSION": "zlib1g-dev",
+}
+
+
+def lock_label(path):
+    try:
+        return str(path.relative_to(ROOT)).replace("\\", "/")
+    except ValueError:
+        return path.name
+
+
+def read_apt_locks(paths):
+    packages = {}
+    snapshots = set()
+    for path in paths:
+        values = {}
+        for line_number, raw_line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+            line = raw_line.strip()
+            if not line or line.startswith("#"):
+                continue
+            match = APT_LOCK_PATTERN.fullmatch(line)
+            if not match:
+                raise SystemExit(f"Malformed Ubuntu APT lock entry: {path}:{line_number}")
+            key, value = match.groups()
+            if key in values:
+                raise SystemExit(f"Duplicate Ubuntu APT lock key: {path}:{key}")
+            values[key] = value
+
+        snapshot = values.pop("UBUNTU_APT_SNAPSHOT", None)
+        if snapshot is None:
+            raise SystemExit(f"Ubuntu APT lock has no snapshot: {path}")
+        if snapshot != "20260814T000000Z":
+            raise SystemExit(f"Unexpected Ubuntu APT snapshot in {path}: {snapshot}")
+        snapshots.add(snapshot)
+
+        for key, version in values.items():
+            package = APT_PACKAGE_NAMES.get(key)
+            if package is None:
+                raise SystemExit(f"Unknown Ubuntu APT package key in {path}: {key}")
+            existing = packages.get(package)
+            if existing is not None and existing["version"] != version:
+                raise SystemExit(
+                    f"Conflicting Ubuntu APT versions for {package}: "
+                    f"{existing['version']} != {version}"
+                )
+            if existing is None:
+                existing = {
+                    "name": package,
+                    "version": version,
+                    "lock_files": set(),
+                    "snapshot": snapshot,
+                }
+                packages[package] = existing
+            existing["lock_files"].add(lock_label(path))
+
+    if len(snapshots) != 1:
+        raise SystemExit("Ubuntu APT locks do not use one common snapshot")
+    return [packages[name] for name in sorted(packages)]
+
+
+def apt_component(row):
+    name = row["name"]
+    version = row["version"]
+    encoded_name = urllib.parse.quote(name, safe="._-")
+    encoded_version = urllib.parse.quote(version, safe="._~-")
+    reference = (
+        f"pkg:deb/ubuntu/{encoded_name}@{encoded_version}"
+        "?arch=amd64&distro=ubuntu-26.04"
+    )
+    snapshot_url = f"https://snapshot.ubuntu.com/ubuntu/{row['snapshot']}/"
+    return {
+        "type": "library",
+        "bom-ref": reference,
+        "group": "ubuntu",
+        "name": name,
+        "version": version,
+        "purl": reference,
+        "properties": [
+            property_entry("pasturestack:package-manager", "apt"),
+            property_entry("pasturestack:direct-package", "true"),
+            property_entry("pasturestack:ubuntu-snapshot", row["snapshot"]),
+            property_entry(
+                "pasturestack:apt-lock-files", ",".join(sorted(row["lock_files"]))
+            ),
+        ],
+        "externalReferences": [{"type": "distribution", "url": snapshot_url}],
+    }
+
+
+def vendor_license_evidence(module):
+    module_root = ROOT / "vendor" / module
+    files = sorted(
+        str(path.relative_to(module_root)).replace("\\", "/")
+        for path in module_root.rglob("*")
+        if path.is_file() and path.name.lower() in LICENSE_NAMES
+    )
+    if files:
+        return files, None, None
+    if module == "github.com/rancher/go-rancher-metadata":
+        return (
+            ["LICENSE"],
+            "Apache-2.0",
+            "https://github.com/rancher-archives/go-rancher-metadata/blob/"
+            "e7e6d237929226cd5da7bd5728a045a686691b1e/LICENSE",
+        )
+    if module == "k8s.io/kubernetes/pkg/controller/framework":
+        return ["LICENSE"], "Apache-2.0", "vendor/k8s.io/kubernetes/LICENSE"
+    raise SystemExit(f"No license or attribution evidence found for vendored module: {module}")
+
+
+def vendor_component(row):
+    module = row["module"].strip()
+    pin = row["pin"].strip()
+    tree_hash = row["tree_sha256"].strip()
+    encoded_module = urllib.parse.quote(module, safe="/._-")
+    encoded_pin = urllib.parse.quote(pin, safe="._+-")
+    reference = f"pkg:golang/{encoded_module}@{encoded_pin}"
+    license_files, license_id, inherited_license = vendor_license_evidence(module)
+    properties = [property_entry("pasturestack:vendor-tree-sha256", tree_hash)]
+    properties.append(property_entry("pasturestack:vendor-license-files", ",".join(license_files)))
+    if inherited_license:
+        properties.append(property_entry("pasturestack:vendor-license-provenance", inherited_license))
+    component = {
+        "type": "library",
+        "bom-ref": reference,
+        "group": module.rsplit("/", 1)[0] if "/" in module else "",
+        "name": module.rsplit("/", 1)[-1],
+        "version": pin,
+        "purl": reference,
+        "hashes": [{"alg": "SHA-256", "content": tree_hash}],
+        "properties": properties,
+    }
+    if license_id:
+        component["licenses"] = [{"license": {"id": license_id}}]
+    if inherited_license and inherited_license.startswith("https://"):
+        component["externalReferences"] = [{"type": "license", "url": inherited_license}]
+    return component
+
+
+def supply_component(row):
+    kind = row["kind"].strip()
+    name = row["name"].strip()
+    version = row["version"].strip()
+    locator = row["locator"].strip()
+    integrity = row["integrity"].strip()
+    usage = row["usage"].strip()
+    component_type = {
+        "archive": "library",
+        "oci": "container",
+        "snapshot": "operating-system",
+        "tool": "application",
+        "action": "application",
+    }[kind]
+    reference = "urn:pasturestack:supply:{}:{}:{}".format(
+        kind,
+        urllib.parse.quote(name, safe="._-"),
+        urllib.parse.quote(version, safe="._+-"),
+    )
+    component = {
+        "type": component_type,
+        "bom-ref": reference,
+        "name": name,
+        "version": version,
+        "properties": [
+            property_entry("pasturestack:source-locator", locator),
+            property_entry("pasturestack:usage", usage),
+        ],
+    }
+    if integrity.startswith("sha256:"):
+        component["hashes"] = [{"alg": "SHA-256", "content": integrity.split(":", 1)[1]}]
+    elif integrity != "not-applicable":
+        component["properties"].append(property_entry("pasturestack:integrity", integrity))
+    if locator.startswith("https://"):
+        component["externalReferences"] = [{"type": "distribution", "url": locator}]
+    return component
+
+
+def build_bom():
+    vendor_rows = read_tsv(ROOT / "vendor.lock")
+    supply_rows = read_tsv(ROOT / "supply-chain.lock")
+    components = [vendor_component(row) for row in vendor_rows]
+    components.extend(
+        supply_component(row) for row in supply_rows if row["kind"] != "module"
+    )
+    components.extend(apt_component(row) for row in read_apt_locks(APT_LOCK_PATHS))
+    components.sort(key=lambda component: component["bom-ref"])
+
+    root_reference = "pkg:github/PastureStack/load-balancer-controller@0.9.27"
+    return {
+        "bomFormat": "CycloneDX",
+        "specVersion": "1.6",
+        "version": 1,
+        "metadata": {
+            "component": {
+                "type": "application",
+                "bom-ref": root_reference,
+                "group": "PastureStack",
+                "name": "load-balancer-controller",
+                "version": "0.9.27",
+                "licenses": [{"license": {"id": "Apache-2.0"}}],
+            }
+        },
+        "components": components,
+        "dependencies": [
+            {
+                "ref": root_reference,
+                "dependsOn": [component["bom-ref"] for component in components],
+            }
+        ]
+        + [{"ref": component["bom-ref"], "dependsOn": []} for component in components],
+    }
+
+
+def main(argv=None):
+    arguments = sys.argv[1:] if argv is None else argv
+    if len(arguments) > 1:
+        raise SystemExit(f"usage: {sys.argv[0]} [OUTPUT]")
+    output = pathlib.Path(arguments[0]) if arguments else None
+    serialized = json.dumps(build_bom(), ensure_ascii=False, indent=2, sort_keys=True) + "\n"
+    if output is None:
+        sys.stdout.write(serialized)
+    else:
+        output.parent.mkdir(parents=True, exist_ok=True)
+        output.write_text(serialized, encoding="utf-8", newline="\n")
+
+
+if __name__ == "__main__":
+    main()

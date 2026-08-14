@@ -1,116 +1,51 @@
-# LB controller
+# PastureStack load-balancer-controller
 
-L7 Load Balancer service managing load balancer provider configured via load balancer controller.
-Pluggable model allows different controller and provider implementation. v0.1.0 has support for Kubernetes ingress as a controller, and Rancher Load Balancer as a provider. 
-Rancher provider is a default one, although you can develop and deploy your own implementation (nginx, traefic, etc). 
+PastureStack is an independent community effort to preserve, audit, and modernize the Rancher 1.6 ecosystem. It is not affiliated with or endorsed by Rancher Labs or SUSE.
 
-# Design
+This branch contains the compatibility runtime used by PastureStack Server to operate HAProxy load-balancer services. It is a GitHub fork of [`rancher/lb-controller`](https://github.com/rancher/lb-controller) and preserves the upstream Git history, authorship, dates, tags, Apache License 2.0 text, and copyright notices.
 
-* LB-controller gets deployed as a containerized app with controller and provider names passed as an argument
-* Controller listens to the corresponding server events, generate load balancer config and pass it to the provider to apply.
-* Provider configures external load balancer, and pass LB public end point to the controller. 
-* Controller propagates LB public end point back to the server.
-* Controller doesn't carry any provider implementation details; it communicates with the provider via generic provider interface using generic LB config.
+## Runtime image
 
-# Kubernetes as an LB controller and Rancher as an LB provider
+PastureStack Server creates this image automatically when a user adds a load-balancer service:
 
-When Kubernetes is passed as an LB controller argument, the app would be deployed to work as a Kubernetes Ingress controller.
-The controller listens to Kubernetes server events like:
-
-* Ingress create/update/remove
-* Backend services create/remove
-* Backend services' endpoint changes 
-
-and generates LB config based on the Kubernetes ingress info. After config is generated, it gets passed to LB provider - Rancher provider in our case.
-The provider will create Rancher Load Balancer service for every Kubernetes ingress, and propagate Load Balancer public endpoint(s) back to the Controller.
-The controller in turn would update Kubernetes ingress with the Address = Rancher Load Balancer public endpoint (ip address of the host where Rancher Load Balancer is deployed):
-
-```
-> kubectl get ingress
-NAME      RULE          BACKEND   ADDRESS
-test      -                        104.154.107.202 // host ip address where Rancher LB is deployed
-          foo.bar.com
-          /foo           nginx-service:80
-
+```text
+ghcr.io/pasturestack/load-balancer-service:v0.9.27
 ```
 
+Release deployments pin the image by digest. The image is not intended to be started by itself because the control plane supplies metadata, API credentials, service links, port rules, and health-check configuration.
 
-Rancher Load Balancer provider:
+## Compatibility
 
-* Configures Rancher LB with hostname routing rules and backend services defined in Kubernetes ingress.
-* Monitors Rancher LB public endpoint changes(LB instance gets redeployed on another host) and report them back to controller, so Kubernetes ingress will be updated accordingly.
-* Manages Rancher LB lifecycle - destroy LB when ingress is removed, create LB once new ingress is added, update LB config when ingress is updated
+The controller accepts role-specific credentials when the orchestration engine supplies them:
 
-Refer to [kubernetes-ingress](//kubernetes.io/docs/user-guide/ingress/) and [kubernetes ingress-controller](//github.com/kubernetes/contrib/blob/master/ingress/controllers/README.md) for more info on Kubernetes ingress and ingress controller implementation solutions.
+- `CATTLE_ENVIRONMENT_ADMIN_ACCESS_KEY`
+- `CATTLE_ENVIRONMENT_ADMIN_SECRET_KEY`
+- `CATTLE_AGENT_ACCESS_KEY`
+- `CATTLE_AGENT_SECRET_KEY`
 
-# Build LB controller
+It also accepts the generic `CATTLE_ACCESS_KEY` and `CATTLE_SECRET_KEY` pair used by older compatible control-plane paths. Role-specific values always take precedence. Secret values are never logged.
 
-You can build LB controller using [Rancher dapper tool](//github.com/rancher/dapper). Just install Dapper, and run the command below from lb-controller directory:
+The HAProxy logging helper keeps its configuration under the Ubuntu AppArmor-approved `/etc/rsyslog.d` path and does not create a daemon PID file. A logging-policy denial therefore cannot block HAProxy configuration from being applied.
 
-```
-dapper
-```
+Protocol-critical `CATTLE_*` variables, `io.rancher.*` labels, metadata paths, API types, and provider identifiers remain compatibility interfaces. They do not represent PastureStack branding or affiliation.
 
-it would build the binaries and create an lb-controller image.
+## Build and test
 
+The maintained build uses Ubuntu 26.04, a pinned Go toolchain, and a source-built HAProxy:
 
-# Deploy LB controller
-
-LB controller with Kubernetes/Rancher support can be deployed as:
-
-* part of Rancher system Kubernetes stack (recommended and officially supported way)
-* as a pod container in Kubernetes deployed through Rancher with ability to access Rancher server API.
-
-# Extra features
-
-* Rancher Load Balancer can be horizontally scaled by specifying desired scale via ingress annotations:
-
-```
-apiVersion: extensions/v1beta1
-kind: Ingress
-metadata:
-  name: scaledlb
-  annotations:
-    scale: "2"
-    http.port: "99"
-spec:
-  backend:
-    serviceName: nginx-service
-    servicePort: 90
+```sh
+make ci
 ```
 
-as a result ingress gets updated with multiple public addresses end points:
+The build produces:
 
-```
-> kubectl get ingress
-NAME      RULE          BACKEND   ADDRESS
-test      -                        104.154.107.202, 104.154.107.203  // hosts ip addresses where Rancher LB instances are deployed
-          foo.bar.com
-          /foo           nginx-service:80
+- `ghcr.io/pasturestack/load-balancer-service:<version>`
+- `ghcr.io/pasturestack/load-balancer-controller-sidecar:<version>`
 
-```
+No CI/CD workflow is enabled in this repository. Release images are built and verified manually before publication.
 
-* By default, Kubernetes Ingress supports 2 public ports for Ingress: 80 and 443. With Rancher Ingress controller, you can define an alternative ports for both http and https:
+## Security and provenance
 
-```
-apiVersion: extensions/v1beta1
-kind: Ingress
-metadata:
-  name: scaledlb
-  annotations:
-    http.port: "99"
-    https.port: "444"
-spec:
-  backend:
-    serviceName: nginx-service
-    servicePort: 90
-```
+See [`ORIGIN.md`](ORIGIN.md) for the preserved upstream boundary and maintenance policy, [`COMPATIBILITY.md`](COMPATIBILITY.md) for the supported runtime contract, and [`SECURITY.md`](SECURITY.md) for reporting guidance.
 
-More info on the above can be found [here](https://docs.rancher.com/rancher/v1.5/en/kubernetes/ingress/)
-
-
-# To fix in the future release
-
-* TLS is supported by Rancher with the only one limitation: there is no SNI routing support. We are going to address it as a part of Load Balancer refacgtoring and integrate with Ingress resource as soon as it's done.
-* Support for TCP Load balancer
-* Possible integration with Route53 provider. LB service FQDN populated by Rancher Route53 service, will be propagated as an entry point for the ingress.
+The root [`LICENSE`](LICENSE) remains authoritative. PastureStack does not claim ownership of upstream work.

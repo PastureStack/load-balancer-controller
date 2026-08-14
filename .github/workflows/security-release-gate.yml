@@ -1,0 +1,374 @@
+name: Security release gate
+
+on:
+  push:
+    branches:
+      - main
+      - 'verification/load-balancer-controller-*'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: load-balancer-controller-security-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build-test-scan:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    env:
+      DAPPER_IMAGE: pasturestack/load-balancer-controller-dapper:${{ github.sha }}
+      SERVICE_IMAGE: ghcr.io/pasturestack/load-balancer-service:v0.9.27
+      SIDECAR_IMAGE: ghcr.io/pasturestack/load-balancer-controller-sidecar:v0.9.27
+      TRIVY_IMAGE: ghcr.io/aquasecurity/trivy:0.74.0@sha256:62b1e65e8869bc4b4c6aa4fa2b21595256c7c2f6018a9d9ad61caf87187c1969
+      VERSION_OVERRIDE: v0.9.27
+    steps:
+      - name: Check out candidate
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Install checksum-pinned Go toolchain and govulncheck
+        shell: bash
+        run: |
+          set -euo pipefail
+          archive="$RUNNER_TEMP/go1.26.6.linux-amd64.tar.gz"
+          curl --fail --silent --show-error --location \
+            --output "$archive" \
+            'https://go.dev/dl/go1.26.6.linux-amd64.tar.gz'
+          printf '%s  %s\n' \
+            '708effb774be8237570d0add163225abbdfaf4fca28b2611df167beba4feef89' \
+            "$archive" | sha256sum --check
+          tar -C "$RUNNER_TEMP" -xzf "$archive"
+          export PATH="$RUNNER_TEMP/go/bin:$PATH"
+          export GOBIN="$RUNNER_TEMP/security-bin"
+          export GOTELEMETRY=off
+          mkdir -p "$GOBIN"
+          go version
+          go install golang.org/x/vuln/cmd/govulncheck@v1.7.0
+          govuln_version="$(go version -m "$GOBIN/govulncheck")"
+          printf '%s\n' "$govuln_version" | tee "$RUNNER_TEMP/govulncheck-version.txt"
+          grep -F $'mod\tgolang.org/x/vuln\tv1.7.0\th1:4MQBuhmXbz2uepNJrf3v+aaZLGDqw1JluwYboegA1qg=' \
+            "$RUNNER_TEMP/govulncheck-version.txt" >/dev/null
+          printf '%s\n' "$RUNNER_TEMP/go/bin" "$GOBIN" >> "$GITHUB_PATH"
+          printf 'GOROOT=%s\n' "$RUNNER_TEMP/go" >> "$GITHUB_ENV"
+
+      - name: Verify immutable source, locks, and legal evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -z "$(git status --porcelain)"
+          git merge-base --is-ancestor b75f773f0e643d99124fc8146b92bb5431e625a6 HEAD
+          test "$(git rev-list --count b75f773f0e643d99124fc8146b92bb5431e625a6..HEAD)" -eq 1
+          git diff --check b75f773f0e643d99124fc8146b92bb5431e625a6..HEAD -- . \
+            ':(exclude)vendor/**'
+          mkdir -p evidence
+          git rev-parse HEAD > evidence/source-revision.txt
+          ./scripts/vendor-lock-test
+          ./scripts/vendor-licenses-test
+          ./scripts/supply-chain-check-test
+          ./scripts/log-safety-test
+          ./scripts/source-sbom-test
+          python3 scripts/source-sbom evidence/source.cdx.json
+          path_separator='/'
+          unix_user_root="${path_separator}home${path_separator}"
+          windows_separator="$(printf '\\')"
+          windows_user_root="C:${windows_separator}Users${windows_separator}"
+          leak_found=0
+          if git grep -n -I -F \
+              -e "$unix_user_root" -e "$windows_user_root" -- . \
+              ':(exclude)vendor/**'; then
+            leak_found=1
+          fi
+          if git grep -n -I -E \
+              '[[:alnum:]._%+-]+@[[:alnum:].-]+\.[[:alpha:]]{2,}' -- . \
+              ':(exclude)vendor/**'; then
+            leak_found=1
+          fi
+          if test "$leak_found" -ne 0; then
+            printf 'Personal or local-workspace data is present in publishable source.\n' >&2
+            exit 1
+          fi
+          sha256sum Dockerfile.dapper Makefile trash.conf vendor.lock supply-chain.lock ubuntu-apt.lock \
+            package/haproxy/Dockerfile package/haproxy/ubuntu-apt.lock \
+            package/rancher/Dockerfile package/rancher/ubuntu-apt.lock \
+            security/dapper-linux-libc-dev-reviewed-cves.txt \
+            security/regression/go_restful_cors_test.go \
+            scripts/build scripts/entry scripts/generate-openvex scripts/openvex-test \
+            scripts/supply-chain-check scripts/supply-chain-check-test scripts/verify-openvex.py \
+            .github/workflows/codeql-verification.yml \
+            .github/workflows/security-release-gate.yml \
+            .github/workflows/release.yml \
+            > evidence/source-locks.sha256
+
+      - name: Build, test, validate, and package both runtime images
+        shell: bash
+        run: |
+          set -euo pipefail
+          source_epoch="$(git show -s --format=%ct HEAD)"
+          VERSION_OVERRIDE="$VERSION_OVERRIDE" TAG="$VERSION_OVERRIDE" \
+            REPO=ghcr.io/pasturestack SOURCE_DATE_EPOCH="$source_epoch" \
+            make DAPPER_IMAGE="$DAPPER_IMAGE" ci
+          expected_owner="$(id -u):$(id -g)"
+          test "$(stat -c '%u:%g' bin/lb-controller)" = "$expected_owner"
+          test "$(stat -c '%u:%g' dist/images)" = "$expected_owner"
+          test ! -e .docker
+          mapfile -t images < dist/images
+          test "${#images[@]}" -eq 2
+          printf '%s\n' "${images[@]}" | LC_ALL=C sort > evidence/runtime-images.txt
+          grep -Fxq "$SERVICE_IMAGE" evidence/runtime-images.txt
+          grep -Fxq "$SIDECAR_IMAGE" evidence/runtime-images.txt
+          test -s bin/lb-controller
+          docker image inspect "$DAPPER_IMAGE" > evidence/dapper-image-inspect.json
+          docker image inspect "$SERVICE_IMAGE" > evidence/service-image-inspect.json
+          docker image inspect "$SIDECAR_IMAGE" > evidence/sidecar-image-inspect.json
+          docker run --rm --entrypoint go "$DAPPER_IMAGE" version > evidence/dapper-go-version.txt
+          docker run --rm --entrypoint docker "$DAPPER_IMAGE" --version \
+            > evidence/dapper-docker-version.txt
+          grep -Fxq 'go version go1.26.6 linux/amd64' evidence/dapper-go-version.txt
+          grep -Fq 'Docker version 29.7.2,' evidence/dapper-docker-version.txt
+          uid="$(id -u)"
+          gid="$(id -g)"
+          docker run --rm \
+            -v "$PWD:/go/src/github.com/rancher/lb-controller" \
+            -e DAPPER_UID="$uid" -e DAPPER_GID="$gid" \
+            "$DAPPER_IMAGE" /bin/bash -lc '
+              set -euo pipefail
+              go list -deps -test ./... > evidence/go-runtime-dependencies.txt
+              python3 scripts/generate-openvex > evidence/openvex.json
+              python3 scripts/verify-openvex.py \
+                --vex evidence/openvex.json \
+                --dependencies evidence/go-runtime-dependencies.txt
+            '
+
+      - name: Enforce race coverage thresholds
+        shell: bash
+        run: |
+          set -euo pipefail
+          uid="$(id -u)"
+          gid="$(id -g)"
+          docker run --rm \
+            -v "$PWD:/go/src/github.com/rancher/lb-controller" \
+            -v /var/run/docker.sock:/var/run/docker.sock \
+            -e DAPPER_UID="$uid" -e DAPPER_GID="$gid" \
+            "$DAPPER_IMAGE" /bin/bash -lc '
+              set -euo pipefail
+              mkdir -p evidence/coverage
+              go test -p 1 -race -tags=test -coverprofile=evidence/coverage/utils.out ./utils
+              go test -p 1 -race -tags=test -coverprofile=evidence/coverage/controller-rancher.out ./controller/rancher
+              go test -p 1 -race -tags=test -coverprofile=evidence/coverage/controller-rancherglb.out ./controller/rancherglb
+              go test -p 1 -race -tags=test -coverprofile=evidence/coverage/provider-haproxy.out ./provider/haproxy
+              go tool cover -func=evidence/coverage/utils.out > evidence/coverage/utils.txt
+              go tool cover -func=evidence/coverage/controller-rancher.out > evidence/coverage/controller-rancher.txt
+              go tool cover -func=evidence/coverage/controller-rancherglb.out > evidence/coverage/controller-rancherglb.txt
+              go tool cover -func=evidence/coverage/provider-haproxy.out > evidence/coverage/provider-haproxy.txt
+              awk "/SanitizeLogText/ { seen=1; gsub(/%/, \"\", \$3); if (\$3 + 0 < 100) exit 1 } END { if (!seen) exit 1 }" evidence/coverage/utils.txt
+              awk "/^total:/ { gsub(/%/, \"\", \$3); if (\$3 + 0 < 40) exit 1 }" evidence/coverage/controller-rancher.txt
+              awk "/^total:/ { gsub(/%/, \"\", \$3); if (\$3 + 0 < 60) exit 1 }" evidence/coverage/controller-rancherglb.txt
+              awk "/^total:/ { gsub(/%/, \"\", \$3); if (\$3 + 0 < 40) exit 1 }" evidence/coverage/provider-haproxy.txt
+            '
+          expected_owner="$(id -u):$(id -g)"
+          test "$(stat -c '%u:%g' evidence/coverage/controller-rancher.out)" = "$expected_owner"
+          test "$(stat -c '%u:%g' evidence/coverage/controller-rancherglb.out)" = "$expected_owner"
+
+      - name: Verify reproducible binary and runtime behavior
+        shell: bash
+        run: |
+          set -euo pipefail
+          cp bin/lb-controller "$RUNNER_TEMP/lb-controller.first"
+          rm -f bin/lb-controller
+          VERSION_OVERRIDE="$VERSION_OVERRIDE" make DAPPER_IMAGE="$DAPPER_IMAGE" build
+          cmp "$RUNNER_TEMP/lb-controller.first" bin/lb-controller
+          sha256sum bin/lb-controller > evidence/product-binary.sha256
+          go version -m bin/lb-controller > evidence/product-go-version.txt
+          grep -F $'build\tCGO_ENABLED=0' evidence/product-go-version.txt >/dev/null
+          docker run --rm --entrypoint /usr/bin/lb-controller "$SERVICE_IMAGE" --version \
+            > evidence/service-version.txt
+          docker run --rm --entrypoint /usr/bin/lb-controller "$SIDECAR_IMAGE" --version \
+            > evidence/sidecar-version.txt
+          grep -Fq 'v0.9.27' evidence/service-version.txt
+          grep -Fq 'v0.9.27' evidence/sidecar-version.txt
+          docker run --rm --entrypoint /usr/sbin/haproxy "$SERVICE_IMAGE" -vv \
+            > evidence/haproxy-version.txt
+          grep -Fq 'HAProxy version 3.4.3' evidence/haproxy-version.txt
+          test "$(docker image inspect --format '{{.Config.User}}' "$SERVICE_IMAGE")" = '10001:10001'
+          for image in "$SERVICE_IMAGE" "$SIDECAR_IMAGE"; do
+            docker run --rm --entrypoint /bin/sh "$image" -ec '
+              test -s /usr/share/licenses/load-balancer-controller/LICENSE
+              test -s /usr/share/licenses/load-balancer-controller/ORIGIN.md
+              test "$(awk -F "\t" "NR > 1 { print \$1 }" /usr/share/licenses/load-balancer-controller/third-party/manifest.tsv | sort -u | wc -l)" -eq 48
+            '
+          done
+          cat > "$RUNNER_TEMP/haproxy-smoke.cfg" <<'EOF'
+          global
+            maxconn 64
+          defaults
+            mode http
+            timeout connect 2s
+            timeout client 2s
+            timeout server 2s
+          frontend smoke
+            bind 127.0.0.1:18080
+            http-request return status 200 content-type text/plain string pasturestack-ok
+          EOF
+          smoke_id="$(docker run -d --rm --network host \
+            -v "$RUNNER_TEMP/haproxy-smoke.cfg:/tmp/haproxy-smoke.cfg:ro" \
+            --entrypoint /usr/sbin/haproxy "$SERVICE_IMAGE" \
+            -W -db -f /tmp/haproxy-smoke.cfg)"
+          trap 'docker rm -f "$smoke_id" >/dev/null 2>&1 || true' EXIT
+          for attempt in $(seq 1 20); do
+            if curl --fail --silent --show-error http://127.0.0.1:18080/ \
+                | grep -Fxq 'pasturestack-ok'; then
+              break
+            fi
+            test "$attempt" -lt 20
+            sleep 0.25
+          done
+          docker rm -f "$smoke_id" >/dev/null
+          trap - EXIT
+
+      - name: Run reachable Go vulnerability analysis
+        shell: bash
+        run: |
+          set -euo pipefail
+          govulncheck -mode=binary -json bin/lb-controller > evidence/govulncheck.json
+          test -s evidence/govulncheck.json
+
+      - name: Scan source, SBOM, product, build image, and runtime images
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker pull "$TRIVY_IMAGE"
+          cache="$RUNNER_TEMP/trivy-cache"
+          source_tree="$(mktemp -d)"
+          product_tree="$(mktemp -d)"
+          mkdir -p "$cache" "$product_tree"
+          trap 'rm -rf "$source_tree" "$product_tree"' EXIT
+          git archive --format=tar HEAD | tar -xf - -C "$source_tree"
+          cp bin/lb-controller "$product_tree/lb-controller"
+          docker run --rm -v "$cache:/root/.cache/trivy" "$TRIVY_IMAGE" image --download-db-only
+          docker run --rm -v "$source_tree:/scan:ro" -v "$PWD/evidence:/evidence" \
+            -v "$cache:/root/.cache/trivy" "$TRIVY_IMAGE" fs \
+            --skip-db-update --offline-scan --scanners vuln,secret --format json \
+            --output /evidence/source-security.json /scan
+          docker run --rm -v "$PWD:/work:ro" -v "$PWD/evidence:/evidence" \
+            -v "$cache:/root/.cache/trivy" "$TRIVY_IMAGE" sbom \
+            --skip-db-update --offline-scan --format json \
+            --output /evidence/source-sbom-security.raw.json /work/evidence/source.cdx.json
+          docker run --rm -v "$PWD:/work:ro" -v "$PWD/evidence:/evidence" \
+            -v "$cache:/root/.cache/trivy" "$TRIVY_IMAGE" sbom \
+            --skip-db-update --offline-scan --format json \
+            --vex /work/evidence/openvex.json --show-suppressed \
+            --output /evidence/source-sbom-security.json /work/evidence/source.cdx.json
+          docker run --rm -v "$product_tree:/scan:ro" -v "$PWD/evidence:/evidence" \
+            -v "$cache:/root/.cache/trivy" "$TRIVY_IMAGE" rootfs \
+            --skip-db-update --offline-scan --scanners vuln,secret --format json \
+            --output /evidence/product-security.json /scan
+          for scope_and_image in \
+            "dapper|$DAPPER_IMAGE" \
+            "service|$SERVICE_IMAGE" \
+            "sidecar|$SIDECAR_IMAGE"; do
+            scope="${scope_and_image%%|*}"
+            image="${scope_and_image#*|}"
+            docker run --rm -v /var/run/docker.sock:/var/run/docker.sock \
+              -v "$PWD:/work" -w /work -v "$cache:/root/.cache/trivy" "$TRIVY_IMAGE" image \
+              --skip-db-update --offline-scan --scanners vuln,secret --format json \
+              --output "/work/evidence/${scope}-security.raw.json" "$image"
+            docker run --rm -v /var/run/docker.sock:/var/run/docker.sock \
+              -v "$PWD:/work" -w /work -v "$cache:/root/.cache/trivy" "$TRIVY_IMAGE" image \
+              --skip-db-update --offline-scan --format cyclonedx \
+              --output "/work/evidence/${scope}.cdx.json" "$image"
+          done
+          docker run --rm -v /var/run/docker.sock:/var/run/docker.sock \
+            -v "$PWD:/work" -w /work -v "$cache:/root/.cache/trivy" "$TRIVY_IMAGE" image \
+            --skip-db-update --offline-scan --scanners vuln,secret --format json \
+            --vex /work/evidence/openvex.json --show-suppressed \
+            --output /work/evidence/dapper-security.json "$DAPPER_IMAGE"
+          docker run --rm -v "$product_tree:/scan:ro" -v "$PWD/evidence:/evidence" \
+            -v "$cache:/root/.cache/trivy" "$TRIVY_IMAGE" rootfs \
+            --skip-db-update --offline-scan --format cyclonedx \
+            --output /evidence/product.cdx.json /scan
+          docker run --rm --entrypoint sh "$DAPPER_IMAGE" -lc \
+            "printf 'package\\tversion\\n'; dpkg-query -W -f='\${binary:Package}\\t\${Version}\\n' | LC_ALL=C sort" \
+            > evidence/dapper-dpkg.tsv
+          docker run --rm --entrypoint sh "$SERVICE_IMAGE" -lc \
+            "printf 'package\\tversion\\n'; dpkg-query -W -f='\${binary:Package}\\t\${Version}\\n' | LC_ALL=C sort" \
+            > evidence/service-dpkg.tsv
+          docker run --rm --entrypoint sh "$SIDECAR_IMAGE" -lc \
+            "printf 'package\\tversion\\n'; dpkg-query -W -f='\${binary:Package}\\t\${Version}\\n' | LC_ALL=C sort" \
+            > evidence/sidecar-dpkg.tsv
+
+      - name: Enforce zero Critical, High, or secrets
+        shell: bash
+        run: |
+          set -euo pipefail
+          : > evidence/security-summary.txt
+          for scope in source source-sbom product dapper service sidecar; do
+            case "$scope" in
+              service|sidecar) report="evidence/${scope}-security.raw.json" ;;
+              *) report="evidence/${scope}-security.json" ;;
+            esac
+            secrets="$(jq '[.Results[]?.Secrets[]?] | length' "$report")"
+            critical="$(jq '[.Results[]?.Vulnerabilities[]? | select(.Severity == "CRITICAL")] | length' "$report")"
+            high="$(jq '[.Results[]?.Vulnerabilities[]? | select(.Severity == "HIGH")] | length' "$report")"
+            printf '%s_secrets=%s\n%s_critical=%s\n%s_high=%s\n' \
+              "$scope" "$secrets" "$scope" "$critical" "$scope" "$high" \
+              | tee -a evidence/security-summary.txt
+            test "$secrets" -eq 0
+            test "$critical" -eq 0
+            test "$high" -eq 0
+          done
+          python3 scripts/verify-openvex.py \
+            --vex evidence/openvex.json \
+            --dependencies evidence/go-runtime-dependencies.txt \
+            --raw-source evidence/source-sbom-security.raw.json \
+            --raw-dapper evidence/dapper-security.raw.json \
+            --applicable-source evidence/source-sbom-security.json \
+            --applicable-dapper evidence/dapper-security.json \
+            --raw-product evidence/product-security.json \
+            --raw-service evidence/service-security.raw.json \
+            --raw-sidecar evidence/sidecar-security.raw.json
+          python3 - <<'PY'
+          import json
+          expected = {
+              'source': ('1.6', 94),
+              'product': (None, 1),
+              'dapper': (None, 1),
+              'service': (None, 1),
+              'sidecar': (None, 1),
+          }
+          for scope, (spec, minimum) in expected.items():
+              path = 'evidence/source.cdx.json' if scope == 'source' else f'evidence/{scope}.cdx.json'
+              with open(path, encoding='utf-8') as stream:
+                  bom = json.load(stream)
+              assert bom.get('bomFormat') == 'CycloneDX'
+              if spec is not None:
+                  assert str(bom.get('specVersion')) == spec
+              if scope == 'source':
+                  assert len(bom.get('components', [])) == minimum
+              else:
+                  assert len(bom.get('components', [])) >= minimum
+              print(f'{scope}_components={len(bom["components"])}')
+          PY
+
+      - name: Upload reviewed security evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: load-balancer-controller-security-${{ github.sha }}
+          path: evidence/
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 9
+
+      - name: Clean runner resources
+        if: always()
+        shell: bash
+        run: |
+          set +e
+          docker image rm -f "$DAPPER_IMAGE" "$SERVICE_IMAGE" "$SIDECAR_IMAGE" "$TRIVY_IMAGE" 2>/dev/null
+          docker builder prune --all --force >/dev/null 2>&1
+          sudo rm -rf bin dist evidence

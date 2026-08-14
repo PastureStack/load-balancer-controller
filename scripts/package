@@ -1,33 +1,69 @@
-#!/bin/bash
-set -e
+#!/usr/bin/env bash
+set -euo pipefail
 
 ARCH=${ARCH:?"ARCH not set"}
 SUFFIX=""
 [ "${ARCH}" != "amd64" ] && SUFFIX="_${ARCH}"
 
-source $(dirname $0)/version
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+root_dir="$(cd "${script_dir}/.." && pwd)"
+source "${script_dir}/version"
 
-cd $(dirname $0)/../package
+cd "${root_dir}"
+mkdir -p dist
 
 TAG=${TAG:-${VERSION}${SUFFIX}}
-REPO=${REPO:-rancher}
+REPO=${REPO:-ghcr.io/pasturestack}
+IMAGE_PREFIX=${IMAGE_PREFIX:-}
+SOURCE_REVISION=${SOURCE_REVISION:-$(git rev-parse HEAD)}
+SOURCE_DATE_EPOCH=${SOURCE_DATE_EPOCH:-$(git show -s --format=%ct HEAD)}
+SOURCE_CREATED_AT="$(date -u -d "@${SOURCE_DATE_EPOCH}" '+%Y-%m-%dT%H:%M:%SZ')"
 
-if [ ! -e ../bin/lb-controller ]; then
-    ../scripts/build
+if [ ! -e bin/lb-controller ]; then
+    scripts/build
 fi
 
-echo "" > ../dist/images
+context_root="${root_dir}/dist/package-contexts"
+license_bundle="${root_dir}/dist/legal/third-party-licenses"
+case "${context_root}" in
+    "${root_dir}"/dist/*) ;;
+    *) printf 'Unsafe package context path: %s\n' "${context_root}" >&2; exit 1 ;;
+esac
+rm -rf "${context_root}" "${root_dir}/dist/legal"
+mkdir -p "${context_root}" "${license_bundle}"
+scripts/vendor-licenses "${license_bundle}"
+: > dist/images
 
-for dir in */
-do
-    cd $dir
-    provider_type=${dir%/}
-    cp ../../bin/lb-controller .
-    cp -r ../../provider/${provider_type}/scripts scripts
-    cp -r ../../provider/${provider_type}/config config
-    IMAGE=${REPO}/lb-service-${provider_type}:${TAG}
-    docker build -t $IMAGE .
-    echo ${IMAGE} >> ../../dist/images
-    echo Built $IMAGE
-    cd ..
-done
+while IFS= read -r provider_dir; do
+    provider_type="$(basename "${provider_dir}")"
+    context_dir="${context_root}/${provider_type}"
+    mkdir -p "${context_dir}"
+
+    while IFS= read -r -d '' tracked_file; do
+        relative_path="${tracked_file#package/${provider_type}/}"
+        mkdir -p "${context_dir}/$(dirname "${relative_path}")"
+        cp -a "${root_dir}/${tracked_file}" "${context_dir}/${relative_path}"
+    done < <(git ls-files -z "package/${provider_type}")
+
+    cp -a bin/lb-controller "${context_dir}/lb-controller"
+    cp -a LICENSE ORIGIN.md "${context_dir}/"
+    cp -a "${license_bundle}" "${context_dir}/third-party-licenses"
+    cp -a "provider/${provider_type}/scripts" "${context_dir}/scripts"
+    cp -a "provider/${provider_type}/config" "${context_dir}/config"
+    find "${context_dir}" -exec touch -h -d "@${SOURCE_DATE_EPOCH}" {} +
+
+    case "${provider_type}" in
+        haproxy) image_name=load-balancer-service ;;
+        rancher) image_name=load-balancer-controller-sidecar ;;
+        *) image_name=load-balancer-service-${provider_type} ;;
+    esac
+    IMAGE=${REPO}/${IMAGE_PREFIX}${image_name}:${TAG}
+    DOCKER_BUILDKIT="${DOCKER_BUILDKIT:-1}" docker build \
+        --network "${DOCKER_BUILD_NETWORK:-host}" \
+        --build-arg PASTURESTACK_IMAGE_VERSION="${TAG}" \
+        --build-arg SOURCE_REVISION="${SOURCE_REVISION}" \
+        --label "org.opencontainers.image.created=${SOURCE_CREATED_AT}" \
+        -t "${IMAGE}" "${context_dir}"
+    printf '%s\n' "${IMAGE}" >> dist/images
+    printf 'Built %s\n' "${IMAGE}"
+done < <(find package -mindepth 1 -maxdepth 1 -type d | LC_ALL=C sort)

@@ -1,0 +1,31 @@
+#!/bin/sh
+set -eu
+
+socket="${LOGLEVEL_SOCKET:-/tmp/log.sock}"
+endpoint="http://localhost/v1/loglevel"
+
+usage() {
+    echo "Usage: loglevel [--set LEVEL]" >&2
+}
+
+if [ "${1:-}" = "--help" ] || [ "${1:-}" = "-h" ]; then
+    usage
+    exit 0
+fi
+
+if [ ! -S "$socket" ]; then
+    echo "loglevel: unix socket not found: $socket" >&2
+    exit 1
+fi
+
+if [ "$#" -eq 0 ]; then
+    exec curl --fail --silent --show-error --unix-socket "$socket" "$endpoint"
+fi
+
+if [ "$#" -eq 2 ] && [ "$1" = "--set" ]; then
+    exec curl --fail --silent --show-error --unix-socket "$socket" \
+        -X POST --data-urlencode "level=$2" "$endpoint"
+fi
+
+usage
+exit 2

@@ -1,0 +1,179 @@
+name: CodeQL verification
+
+on:
+  push:
+    branches:
+      - main
+      - 'verification/load-balancer-controller-*'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  security-events: write
+
+concurrency:
+  group: load-balancer-controller-codeql-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  analyze:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - language: go
+            build-mode: manual
+          - language: actions
+            build-mode: none
+    steps:
+      - name: Check out candidate
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Verify candidate shape
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -z "$(git status --porcelain)"
+          git merge-base --is-ancestor b75f773f0e643d99124fc8146b92bb5431e625a6 HEAD
+          test "$(git rev-list --count b75f773f0e643d99124fc8146b92bb5431e625a6..HEAD)" -eq 1
+          git diff --check b75f773f0e643d99124fc8146b92bb5431e625a6..HEAD -- . \
+            ':(exclude)vendor/**'
+          ./scripts/vendor-lock --check
+          ./scripts/supply-chain-check-test
+          ./scripts/log-safety-test
+
+      - name: Install checksum-pinned Go toolchain
+        if: matrix.language == 'go'
+        shell: bash
+        run: |
+          set -euo pipefail
+          archive="$RUNNER_TEMP/go1.26.6.linux-amd64.tar.gz"
+          curl --fail --silent --show-error --location \
+            --output "$archive" \
+            'https://go.dev/dl/go1.26.6.linux-amd64.tar.gz'
+          printf '%s  %s\n' \
+            '708effb774be8237570d0add163225abbdfaf4fca28b2611df167beba4feef89' \
+            "$archive" | sha256sum --check
+          tar -C "$RUNNER_TEMP" -xzf "$archive"
+          "$RUNNER_TEMP/go/bin/go" version
+          printf '%s\n' "$RUNNER_TEMP/go/bin" >> "$GITHUB_PATH"
+          printf 'GOROOT=%s\n' "$RUNNER_TEMP/go" >> "$GITHUB_ENV"
+          printf 'CODEQL_EXTRACTOR_GO_OPTION_EXTRACT_TESTS=true\n' >> "$GITHUB_ENV"
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@ff2f1c621b7f889edc0d3c761ac2e6a3f8cdb0dd # v4.37.7
+        with:
+          languages: ${{ matrix.language }}
+          build-mode: ${{ matrix.build-mode }}
+          config: |
+            queries:
+              - uses: security-extended
+            threat-models: local
+
+      - name: Build and compile-test Go source
+        if: matrix.language == 'go'
+        shell: bash
+        run: |
+          set -euo pipefail
+          export GO111MODULE=off
+          export GO15VENDOREXPERIMENT=1
+          export GOTELEMETRY=off
+          export GOPATH="$RUNNER_TEMP/gopath"
+          source_root="$GOPATH/src/github.com/rancher/lb-controller"
+          mkdir -p "$(dirname "$source_root")" "$GITHUB_WORKSPACE/bin"
+          ln -s "$GITHUB_WORKSPACE" "$source_root"
+          cd "$source_root"
+          go test -run '^$' -tags=test ./...
+          go test ./vendor/golang.org/x/sys/windows/mkwinsyscall
+          CGO_ENABLED=0 go build -trimpath -tags netgo \
+            -ldflags='-buildid= -s -w -X main.VERSION=v0.9.27' \
+            -o "$GITHUB_WORKSPACE/bin/lb-controller" ./
+
+      - name: Analyze and publish main-branch CodeQL results
+        id: codeql_analyze
+        uses: github/codeql-action/analyze@ff2f1c621b7f889edc0d3c761ac2e6a3f8cdb0dd # v4.37.7
+        with:
+          category: '/language:${{ matrix.language }}'
+          upload: ${{ github.ref == 'refs/heads/main' && 'always' || 'never' }}
+          output: codeql-results
+
+      - name: Reject Critical, High, unresolved metadata, and log injection
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import glob
+          import json
+
+          blocked = []
+          unresolved = []
+          tool_execution_errors = []
+          total = 0
+          explicitly_blocked_rules = {'go/log-injection'}
+          for path in glob.glob('codeql-results/**/*.sarif', recursive=True):
+              with open(path, encoding='utf-8') as stream:
+                  sarif = json.load(stream)
+              for run in sarif.get('runs', []):
+                  for invocation in run.get('invocations', []):
+                      if invocation.get('executionSuccessful') is False:
+                          tool_execution_errors.append(('execution', 'CodeQL execution was unsuccessful'))
+                      for notification in invocation.get('toolExecutionNotifications', []):
+                          if notification.get('level') == 'error':
+                              descriptor = notification.get('descriptor', {}).get('id', 'unknown')
+                              message = notification.get('message', {}).get('text', 'unknown error')
+                              tool_execution_errors.append((descriptor, message))
+                  rules = {
+                      rule.get('id'): rule
+                      for rule in run.get('tool', {}).get('driver', {}).get('rules', [])
+                  }
+                  for extension in run.get('tool', {}).get('extensions', []):
+                      rules.update({rule.get('id'): rule for rule in extension.get('rules', [])})
+                  for result in run.get('results', []):
+                      total += 1
+                      rule_id = result.get('ruleId')
+                      rule = rules.get(rule_id)
+                      if rule is None:
+                          unresolved.append((rule_id, 'missing rule metadata'))
+                          continue
+                      raw_score = rule.get('properties', {}).get('security-severity', '0')
+                      try:
+                          score = float(raw_score)
+                      except (TypeError, ValueError):
+                          unresolved.append((rule_id, 'invalid security severity'))
+                          continue
+                      if score >= 7.0 or rule_id in explicitly_blocked_rules:
+                          location = result.get('locations', [{}])[0].get('physicalLocation', {})
+                          blocked.append((
+                              rule_id,
+                              score,
+                              location.get('artifactLocation', {}).get('uri', 'unknown'),
+                              location.get('region', {}).get('startLine', 0),
+                          ))
+          print(f'codeql_total={total}')
+          print(f'codeql_blocked={len(blocked)}')
+          print(f'codeql_unresolved_rule_metadata={len(unresolved)}')
+          print(f'codeql_tool_execution_errors={len(tool_execution_errors)}')
+          for finding in blocked:
+              print(f'{finding[0]}\t{finding[1]}\t{finding[2]}:{finding[3]}')
+          for finding in unresolved:
+              print(f'{finding[0]}\t{finding[1]}')
+          for finding in tool_execution_errors:
+              print(f'{finding[0]}\t{finding[1]}')
+          if blocked or unresolved or tool_execution_errors:
+              raise SystemExit(1)
+          PY
+
+      - name: Upload CodeQL verification evidence
+        if: ${{ always() && steps.codeql_analyze.outcome != 'skipped' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: load-balancer-controller-codeql-${{ matrix.language }}-${{ github.sha }}
+          path: codeql-results/
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 9

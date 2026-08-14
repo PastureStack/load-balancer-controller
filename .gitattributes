@@ -1,0 +1,8 @@
+* text=auto
+.gitattributes text eol=lf
+*.sh text eol=lf
+Dockerfile* text eol=lf
+Makefile text eol=lf
+scripts/* text eol=lf
+package/** text eol=lf
+provider/** text eol=lf

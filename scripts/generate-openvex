@@ -1,0 +1,202 @@
+#!/usr/bin/env python3
+"""Generate the exact reviewed OpenVEX document for release 0.9.27."""
+
+from __future__ import annotations
+
+import json
+import pathlib
+import re
+import sys
+
+
+ROOT = pathlib.Path(__file__).resolve().parent.parent
+LINUX_CVES = ROOT / "security" / "dapper-linux-libc-dev-reviewed-cves.txt"
+
+GO_RESTFUL_PURL = (
+    "pkg:golang/github.com/emicklei/go-restful@v1.2-75-gb14c3a9"
+)
+PROMETHEUS_PURL = (
+    "pkg:golang/github.com/prometheus/client_golang@0.7.0-87-g28be158"
+)
+KUBERNETES_PURL = "pkg:golang/k8s.io/kubernetes@v1.4.4"
+DOCKER_PURL = "pkg:golang/github.com/docker/docker@v28.5.2%2Bincompatible"
+GO_STDLIB_PURL = "pkg:golang/stdlib@v1.26.5"
+LINUX_HEADERS_PURL = (
+    "pkg:deb/ubuntu/linux-libc-dev@7.0.0-29.29"
+    "?arch=amd64&distro=ubuntu-26.04"
+)
+
+
+def reviewed_linux_cves() -> list[str]:
+    cves = [line.strip() for line in LINUX_CVES.read_text(encoding="utf-8").splitlines()]
+    if not cves or any(not re.fullmatch(r"CVE-[0-9]{4}-[0-9]{4,}", cve) for cve in cves):
+        raise SystemExit("invalid reviewed linux-libc-dev CVE list")
+    if cves != sorted(set(cves)):
+        raise SystemExit("reviewed linux-libc-dev CVEs must be sorted and unique")
+    return cves
+
+
+def statement(
+    vulnerability: str,
+    product: str,
+    status: str,
+    impact_statement: str,
+    justification: str | None = None,
+) -> dict[str, object]:
+    result: dict[str, object] = {
+        "vulnerability": {"name": vulnerability},
+        "products": [{"@id": product}],
+        "status": status,
+        "impact_statement": impact_statement,
+    }
+    if justification is not None:
+        result["justification"] = justification
+    return result
+
+
+def build_document() -> dict[str, object]:
+    statements: list[dict[str, object]] = []
+
+    statements.append(
+        statement(
+            "CVE-2022-1996",
+            GO_RESTFUL_PURL,
+            "fixed",
+            "The vendored v1-compatible source contains the upstream exact-origin "
+            "matching patch. HTTP-level regression coverage preserves exact and "
+            "intended subdomain origins while rejecting attacker-controlled prefixes "
+            "and suffixes.",
+        )
+    )
+    statements.append(
+        statement(
+            "CVE-2022-21698",
+            PROMETHEUS_PURL,
+            "not_affected",
+            "The controller does not register or call InstrumentHandler middleware. "
+            "The affected unbounded HTTP method-label path has no caller from the "
+            "linked command.",
+            "vulnerable_code_not_in_execute_path",
+        )
+    )
+
+    kubernetes_groups = [
+        (
+            ["CVE-2019-11253"],
+            "The affected API-server request decoding package is not present in the "
+            "controller dependency graph or linked command.",
+        ),
+        (
+            ["CVE-2020-8558"],
+            "The affected kubelet and kube-proxy networking implementations are not "
+            "present in the controller dependency graph or linked command.",
+        ),
+        (
+            ["CVE-2021-25741"],
+            "The affected kubelet subpath volume-mount implementation is not present "
+            "in the controller dependency graph or linked command.",
+        ),
+        (
+            ["CVE-2023-3676", "CVE-2023-3955", "CVE-2023-5528", "CVE-2024-5321"],
+            "The affected Windows kubelet, in-tree storage, and container-log "
+            "implementations are not present in the controller dependency graph or "
+            "linked Linux command.",
+        ),
+        (
+            ["CVE-2024-0793"],
+            "The affected horizontal-pod-autoscaler controller implementation from "
+            "kube-controller-manager is not present in the controller dependency "
+            "graph or linked command.",
+        ),
+        (
+            ["CVE-2024-10220"],
+            "The affected kubelet gitRepo volume implementation is not present in the "
+            "controller dependency graph or linked command.",
+        ),
+    ]
+    for vulnerabilities, impact in kubernetes_groups:
+        for vulnerability in vulnerabilities:
+            statements.append(
+                statement(
+                    vulnerability,
+                    KUBERNETES_PURL,
+                    "not_affected",
+                    impact,
+                    "vulnerable_code_not_present",
+                )
+            )
+
+    linux_impact = (
+        "This ephemeral build-only package contains Linux userspace API headers and "
+        "documentation, not the vulnerable kernel implementation. It is required by "
+        "the compile and race-test toolchain and is not copied into either runtime "
+        "image."
+    )
+    for vulnerability in reviewed_linux_cves():
+        statements.append(
+            statement(
+                vulnerability,
+                LINUX_HEADERS_PURL,
+                "not_affected",
+                linux_impact,
+                "vulnerable_code_not_present",
+            )
+        )
+
+    docker_impact = (
+        "The module is detected only in the ephemeral Buildx client binary. The "
+        "affected daemon authorization, archive extraction, and bind-mount functions "
+        "are absent from that linked binary and neither runtime image contains the "
+        "build tool."
+    )
+    for vulnerability in ["CVE-2026-34040", "CVE-2026-41567", "CVE-2026-42306"]:
+        statements.append(
+            statement(
+                vulnerability,
+                DOCKER_PURL,
+                "not_affected",
+                docker_impact,
+                "vulnerable_code_not_present",
+            )
+        )
+
+    statements.append(
+        statement(
+            "CVE-2026-39821",
+            GO_STDLIB_PURL,
+            "not_affected",
+            "The affected Go 1.26.5 code exists only in the official Docker CLI and "
+            "Buildx binaries inside the ephemeral build image. Every hostname passed "
+            "to those tools is fixed by reviewed workflow, Dockerfile, and supply-chain "
+            "locks; pull-request input and runtime users cannot supply an alternate "
+            "Punycode hostname. The VEX is never applied to runtime-image scans.",
+            "vulnerable_code_cannot_be_controlled_by_adversary",
+        )
+    )
+    statements.append(
+        statement(
+            "CVE-2026-46600",
+            GO_STDLIB_PURL,
+            "not_affected",
+            "The affected SVCB and HTTPS resource-record parsing symbols are not in "
+            "the execution path of the Docker CLI or Buildx commands used by this "
+            "ephemeral build image. The VEX is never applied to runtime-image scans.",
+            "vulnerable_code_not_in_execute_path",
+        )
+    )
+
+    return {
+        "@context": "https://openvex.dev/ns/v0.2.0",
+        "@id": (
+            "https://github.com/PastureStack/load-balancer-controller/"
+            "security/openvex/0.9.27"
+        ),
+        "author": "PastureStack Security",
+        "timestamp": "2026-08-14T08:00:00Z",
+        "version": 1,
+        "statements": statements,
+    }
+
+
+json.dump(build_document(), sys.stdout, indent=2, sort_keys=False)
+sys.stdout.write("\n")

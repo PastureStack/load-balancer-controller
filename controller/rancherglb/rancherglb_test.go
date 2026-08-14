@@ -1,7 +1,7 @@
 package rancherglb
 
 import (
-	// "github.com/Sirupsen/logrus"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -205,46 +205,46 @@ func (mf tMetaFetcher) GetContainer(envUUID string, containerName string) (*meta
 func (mf tMetaFetcher) GetServices() ([]metadata.Service, error) {
 	var svcs []metadata.Service
 
-	foo, err := mf.GetService("", "foo", "foo")
+	foo, err := mf.GetService("foo/foo")
 	if err != nil {
 		return nil, err
 	}
 	svcs = append(svcs, *foo)
-	foodup, err := mf.GetService("", "foodup", "foo")
+	foodup, err := mf.GetService("foo/foodup")
 	if err != nil {
 		return nil, err
 	}
 	svcs = append(svcs, *foodup)
-	bar, err := mf.GetService("", "bar", "bar")
+	bar, err := mf.GetService("bar/bar")
 	if err != nil {
 		return nil, err
 	}
 	svcs = append(svcs, *bar)
-	lbBar, err := mf.GetService("", "lbbar", "bar")
+	lbBar, err := mf.GetService("bar/lbBar")
 	if err != nil {
 		return nil, err
 	}
 	svcs = append(svcs, *lbBar)
 
-	lbFoo, err := mf.GetService("", "lbfoo", "foo")
+	lbFoo, err := mf.GetService("foo/lbfoo")
 	if err != nil {
 		return nil, err
 	}
 	svcs = append(svcs, *lbFoo)
 
-	lbFooDup, err := mf.GetService("", "lbfoodup", "foo")
+	lbFooDup, err := mf.GetService("foo/lbfoodup")
 	if err != nil {
 		return nil, err
 	}
 	svcs = append(svcs, *lbFooDup)
 
-	lbInactive, err := mf.GetService("", "lbinactive", "foo")
+	lbInactive, err := mf.GetService("foo/lbinactive")
 	if err != nil {
 		return nil, err
 	}
 	svcs = append(svcs, *lbInactive)
 
-	lbActive, err := mf.GetService("", "lbactive", "foo")
+	lbActive, err := mf.GetService("foo/lbactive")
 	if err != nil {
 		return nil, err
 	}
@@ -253,9 +253,35 @@ func (mf tMetaFetcher) GetServices() ([]metadata.Service, error) {
 	return svcs, nil
 }
 
-func (mf tMetaFetcher) GetService(envUUID string, svcName string, stackName string) (*metadata.Service, error) {
-	var svc *metadata.Service
+func (mf tMetaFetcher) GetServicesFromRegionEnvironment(regionName string, envName string) ([]metadata.Service, error) {
+	var svcs []metadata.Service
+	return svcs, nil
+}
 
+func (mf tMetaFetcher) GetServicesInLocalRegion(envName string) ([]metadata.Service, error) {
+	var svcs []metadata.Service
+	return svcs, nil
+}
+
+func (mf tMetaFetcher) GetServiceFromRegionEnvironment(regionName string, envName string, stackName string, svcName string) (metadata.Service, error) {
+	var svc metadata.Service
+	return svc, nil
+}
+
+func (mf tMetaFetcher) GetServiceInLocalRegion(envName string, stackName string, svcName string) (metadata.Service, error) {
+	var svc metadata.Service
+	return svc, nil
+}
+
+func (mf tMetaFetcher) GetServiceInLocalEnvironment(stackName string, svcName string) (metadata.Service, error) {
+	var svc metadata.Service
+	return svc, nil
+}
+
+func (mf tMetaFetcher) GetService(link string) (*metadata.Service, error) {
+	var svc *metadata.Service
+	splitSvcName := strings.Split(link, "/")
+	svcName := splitSvcName[1]
 	if strings.EqualFold(svcName, "foo") {
 		foo := metadata.Service{
 			Kind:       "service",
@@ -458,8 +484,8 @@ func (mf tMetaFetcher) GetSelfService() (metadata.Service, error) {
 	var portRules []metadata.PortRule
 	portRules = append(portRules, portRule)
 	lbConfig := metadata.LBConfig{
-		DefaultCertificateID: defaultCert,
-		PortRules:            portRules,
+		DefaultCert: defaultCert,
+		PortRules:   portRules,
 	}
 	lbfoo := metadata.Service{
 		Kind:      "loadBalancerService",
@@ -474,22 +500,26 @@ func (mf tMetaFetcher) GetSelfService() (metadata.Service, error) {
 func (mf tMetaFetcher) OnChange(intervalSeconds int, do func(string)) {
 }
 
+func (mf tMetaFetcher) GetRegionName() (string, error) {
+	return "", nil
+}
+
 func (cf tCertFetcher) FetchCertificates(lbMeta *rancher.LBMetadata, isDefaultCert bool) ([]*config.Certificate, error) {
 	certs := []*config.Certificate{}
 	var defaultCert *config.Certificate
 
 	if !isDefaultCert {
-		for _, certID := range lbMeta.CertificateIDs {
-			cert, err := cf.FetchRancherCertificate(certID)
+		for _, certName := range lbMeta.Certs {
+			cert, err := cf.FetchRancherCertificate(certName)
 			if err != nil {
 				return nil, err
 			}
 			certs = append(certs, cert)
 		}
 	} else {
-		if lbMeta.DefaultCertificateID != "" {
+		if lbMeta.DefaultCert != "" {
 			var err error
-			defaultCert, err = cf.FetchRancherCertificate(lbMeta.DefaultCertificateID)
+			defaultCert, err = cf.FetchRancherCertificate(lbMeta.DefaultCert)
 			if err != nil {
 				return nil, err
 			}
@@ -531,8 +561,23 @@ func (p *tProvider) GetName() string {
 	return ""
 }
 
-func (p *tProvider) GetPublicEndpoints(configName string) []string {
-	return []string{}
+func (p *tProvider) DrainEndpoint(ep *config.Endpoint) bool {
+	return false
+}
+
+func (p *tProvider) IsEndpointUpForDrain(ep *config.Endpoint) bool {
+	return false
+}
+
+func (p *tProvider) IsEndpointDrained(ep *config.Endpoint) bool {
+	return false
+}
+
+func (p *tProvider) RemoveEndpointFromDrain(ep *config.Endpoint) {
+}
+
+func (p *tProvider) GetPublicEndpoints(configName string) ([]string, error) {
+	return []string{}, nil
 }
 
 func (p *tProvider) CleanupConfig(configName string) error {
@@ -552,4 +597,8 @@ func (p *tProvider) IsHealthy() bool {
 
 func (p *tProvider) ProcessCustomConfig(lbConfig *config.LoadBalancerConfig, customConfig string) error {
 	return nil
+}
+
+func (p *tProvider) GetExistingConfigNames() (map[string]bool, error) {
+	return nil, fmt.Errorf("method is not implemented")
 }

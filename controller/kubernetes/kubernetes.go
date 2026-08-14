@@ -1,22 +1,24 @@
 package kubernetes
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io/ioutil"
+	"os"
 	"reflect"
+	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 
-	"os"
-	"strconv"
-
-	"github.com/Sirupsen/logrus"
 	"github.com/rancher/lb-controller/config"
 	"github.com/rancher/lb-controller/controller"
 	"github.com/rancher/lb-controller/provider"
 	utils "github.com/rancher/lb-controller/utils"
+	"github.com/rancher/log"
+	"github.com/sirupsen/logrus"
 	"github.com/spf13/pflag"
 	"k8s.io/kubernetes/pkg/api"
 	"k8s.io/kubernetes/pkg/api/unversioned"
@@ -31,14 +33,19 @@ import (
 	"k8s.io/kubernetes/pkg/watch"
 )
 
+const (
+	syncAll = "syncAll"
+)
+
 var (
 	flags        = pflag.NewFlagSet("", pflag.ExitOnError)
 	resyncPeriod = flags.Duration("sync-period", 30*time.Second,
-		`Relist and confirm cloud resources this often.`)
+		`Re-list and confirm cloud resources this often.`)
 )
 
 const (
 	rancherStickinessPolicyLabel = "io.rancher.stickiness.policy"
+	livenessProbesLabel          = "io.rancher.kubernetes.livenessprobes"
 	caLocation                   = "/etc/kubernetes/ssl/ca.pem"
 	ingressClassKey              = "kubernetes.io/ingress.class"
 	rancherIngressClass          = "rancher"
@@ -53,11 +60,11 @@ func init() {
 
 		bytes, err := ioutil.ReadAll(os.Stdin)
 		if err != nil {
-			return fmt.Errorf("Failed to read token from stdin: %v", err)
+			return fmt.Errorf("failed to read token from stdin: %v", err)
 		}
 		token := strings.TrimSpace(string(bytes))
 		if token == "" {
-			return errors.New("No token passed in from stdin")
+			return errors.New("no token passed in from stdin")
 		}
 
 		config := &restclient.Config{
@@ -87,7 +94,7 @@ func init() {
 
 		return nil
 	}(); err != nil {
-		logrus.Errorf("Failed to initialize Kubernetes controller: %v", err)
+		log.Errorf("Failed to initialize Kubernetes controller: %v", err)
 	}
 }
 
@@ -106,16 +113,33 @@ type loadBalancerController struct {
 	recorder       record.EventRecorder
 	syncQueue      *utils.TaskQueue
 	ingQueue       *utils.TaskQueue
-	cleanupQueue   *utils.TaskQueue
 	stopLock       sync.Mutex
 	shutdown       bool
 	stopCh         chan struct{}
 	lbProvider     provider.LBProvider
 }
 
+type Probe struct {
+	HTTPGet          *HTTPProbe `json:"httpGet,omitempty"`
+	TCPSocket        *TCPProbe  `json:"tcpSocket,omitempty"`
+	PeriodSeconds    int        `json:"periodSeconds,omitempty"`
+	SuccessThreshold int        `json:"successThreshold,omitempty"`
+	FailureThreshold int        `json:"failureThreshold,omitempty"`
+	TimeoutSeconds   int        `json:"timeoutSeconds,omitempty"`
+}
+
+type HTTPProbe struct {
+	Path string `json:"path,omitempty"`
+	Port int    `json:"port,omitempty"`
+}
+
+type TCPProbe struct {
+	Port int `json:"port,omitempty"`
+}
+
 func newLoadBalancerController(kubeClient *client.Client, resyncPeriod time.Duration, namespace string) (*loadBalancerController, error) {
 	eventBroadcaster := record.NewBroadcaster()
-	eventBroadcaster.StartLogging(logrus.Infof)
+	eventBroadcaster.StartLogging(log.Infof)
 	eventBroadcaster.StartRecordingToSink(kubeClient.Events(""))
 	lbc := loadBalancerController{
 		client:   kubeClient,
@@ -125,40 +149,39 @@ func newLoadBalancerController(kubeClient *client.Client, resyncPeriod time.Dura
 
 	lbc.syncQueue = utils.NewTaskQueue(lbc.sync)
 	lbc.ingQueue = utils.NewTaskQueue(lbc.updateIngressStatus)
-	lbc.cleanupQueue = utils.NewTaskQueue(lbc.cleanupLB)
 
 	ingEventHandler := framework.ResourceEventHandlerFuncs{
 		AddFunc: func(obj interface{}) {
 			addIng := obj.(*extensions.Ingress)
-			lbc.recorder.Eventf(addIng, api.EventTypeNormal, "CREATE", fmt.Sprintf("%s/%s", addIng.Namespace, addIng.Name))
-			lbc.ingQueue.Enqueue(obj)
-			lbc.syncQueue.Enqueue(obj)
+			lbc.recorder.Eventf(addIng, api.EventTypeNormal, "CREATE", "%s", fmt.Sprintf("%s/%s", addIng.Namespace, addIng.Name))
+			lbc.ingQueue.Enqueue(syncAll)
+			lbc.syncQueue.Enqueue(syncAll)
 		},
 		DeleteFunc: func(obj interface{}) {
 			upIng := obj.(*extensions.Ingress)
-			lbc.recorder.Eventf(upIng, api.EventTypeNormal, "DELETE", fmt.Sprintf("%s/%s", upIng.Namespace, upIng.Name))
-			lbc.cleanupQueue.Enqueue(obj)
+			lbc.recorder.Eventf(upIng, api.EventTypeNormal, "DELETE", "%s", fmt.Sprintf("%s/%s", upIng.Namespace, upIng.Name))
+			lbc.syncQueue.Enqueue(syncAll)
 		},
 		UpdateFunc: func(old, cur interface{}) {
 			if !reflect.DeepEqual(old, cur) {
 				upIng := cur.(*extensions.Ingress)
-				lbc.recorder.Eventf(upIng, api.EventTypeNormal, "UPDATE", fmt.Sprintf("%s/%s", upIng.Namespace, upIng.Name))
-				lbc.ingQueue.Enqueue(cur)
-				lbc.syncQueue.Enqueue(cur)
+				lbc.recorder.Eventf(upIng, api.EventTypeNormal, "UPDATE", "%s", fmt.Sprintf("%s/%s", upIng.Namespace, upIng.Name))
+				lbc.ingQueue.Enqueue(syncAll)
+				lbc.syncQueue.Enqueue(syncAll)
 			}
 		},
 	}
 
 	eventHandler := framework.ResourceEventHandlerFuncs{
 		AddFunc: func(obj interface{}) {
-			lbc.syncQueue.Enqueue(obj)
+			lbc.syncQueue.Enqueue(syncAll)
 		},
 		DeleteFunc: func(obj interface{}) {
-			lbc.syncQueue.Enqueue(obj)
+			lbc.syncQueue.Enqueue(syncAll)
 		},
 		UpdateFunc: func(old, cur interface{}) {
 			if !reflect.DeepEqual(old, cur) {
-				lbc.syncQueue.Enqueue(cur)
+				lbc.syncQueue.Enqueue(syncAll)
 			}
 		},
 	}
@@ -185,13 +208,6 @@ func newLoadBalancerController(kubeClient *client.Client, resyncPeriod time.Dura
 		&api.Service{}, resyncPeriod, framework.ResourceEventHandlerFuncs{})
 
 	return &lbc, nil
-}
-
-func (lbc *loadBalancerController) cleanupLB(key string) {
-	if err := lbc.lbProvider.CleanupConfig(key); err != nil {
-		lbc.syncQueue.Requeue(key, fmt.Errorf("Failed to cleanup lb [%s]", key))
-		return
-	}
 }
 
 func ingressListFunc(c *client.Client, ns string) func(api.ListOptions) (runtime.Object, error) {
@@ -236,20 +252,71 @@ func (lbc *loadBalancerController) controllersInSync() bool {
 
 func (lbc *loadBalancerController) sync(key string) {
 	if !lbc.controllersInSync() {
-		lbc.syncQueue.Requeue(key, fmt.Errorf("deferring sync till endpoints controller has synced"))
+		lbc.syncQueue.Requeue(syncAll, fmt.Errorf("deferring sync till endpoints controller has synced"))
 		return
 	}
+
+	// 1) apply new configs
 	requeue := false
-	cfgs, _ := lbc.GetLBConfigs()
-	for _, cfg := range cfgs {
-		if err := lbc.lbProvider.ApplyConfig(cfg); err != nil {
-			logrus.Errorf("Failed to apply lb config on provider: %v", err)
+	toApply, err := lbc.GetLBConfigs()
+	if err != nil {
+		log.Errorf("Error forming LB Config from Ingress spec: %s", utils.SanitizeLogText(err.Error()))
+		lbc.syncQueue.Requeue(syncAll, fmt.Errorf("retrying sync as config fetching failed"))
+		return
+	}
+
+	for _, cfg := range toApply {
+		if err = lbc.lbProvider.ApplyConfig(cfg); err != nil {
+			logrus.Errorf("failed to apply lb config on provider: %s", utils.SanitizeLogText(err.Error()))
 			requeue = true
 		}
 	}
+
 	if requeue {
-		lbc.syncQueue.Requeue(key, fmt.Errorf("retrying sync as one of the configs failed to apply on a backend"))
+		lbc.syncQueue.Requeue(syncAll, fmt.Errorf("retrying sync as one of the configs failed to apply on a backend"))
+		return
 	}
+	// 2) remove obsolete configs
+	toCleanup, err := lbc.getConfigsToCleanup()
+	if err != nil {
+		lbc.syncQueue.Requeue(syncAll, fmt.Errorf("retrying sync as failed to get configs to cleanup from provider: %s", utils.SanitizeLogText(err.Error())))
+		return
+	}
+	for _, cfg := range toCleanup {
+		if err = lbc.lbProvider.CleanupConfig(cfg); err != nil {
+			logrus.Errorf("failed to cleanup lb config on provider: %s", utils.SanitizeLogText(err.Error()))
+			requeue = true
+		}
+	}
+
+	if requeue {
+		lbc.syncQueue.Requeue(syncAll, fmt.Errorf("retrying sync as one of the configs failed to cleanup on a backend"))
+		return
+	}
+}
+
+func (lbc *loadBalancerController) getConfigsToCleanup() ([]string, error) {
+	ings := lbc.ingLister.Store.List()
+	controllerIng := map[string]bool{}
+	for _, ingObj := range ings {
+		ing := ingObj.(*extensions.Ingress)
+		if ing.DeletionTimestamp == nil {
+			controllerIng[fmt.Sprintf("%s/%s", ing.Namespace, ing.Name)] = true
+		}
+	}
+
+	providerIng, err := lbc.lbProvider.GetExistingConfigNames()
+	if err != nil {
+		return nil, err
+	}
+
+	var toCleanup []string
+	for key := range providerIng {
+		if _, ok := controllerIng[key]; !ok {
+			toCleanup = append(toCleanup, key)
+		}
+	}
+	return toCleanup, nil
 }
 
 func (lbc *loadBalancerController) updateIngressStatus(key string) {
@@ -269,81 +336,55 @@ func (lbc *loadBalancerController) updateIngressStatus(key string) {
 	}
 
 	ing := obj.(*extensions.Ingress)
+	if ing.DeletionTimestamp != nil {
+		return
+	}
 
 	ingClient := lbc.client.Extensions().Ingress(ing.Namespace)
 
 	currIng, err := ingClient.Get(ing.Name)
 	if err != nil {
-		logrus.Errorf("unexpected error searching Ingress %v/%v: %v", ing.Namespace, ing.Name, err)
+		log.Errorf("unexpected error searching ingress [%s]: %v", key, err)
 		return
 	}
 
 	lbIPs := ing.Status.LoadBalancer.Ingress
-	publicEndpoints := lbc.getPublicEndpoints(key)
-	toAdd, toRemove := lbc.getIPsToAddRemove(lbIPs, publicEndpoints)
-
-	// add missing
-	for _, IP := range toAdd {
-		logrus.Infof("Updating ingress %v/%v with IP %v", ing.Namespace, ing.Name, IP)
-		currIng.Status.LoadBalancer.Ingress = append(currIng.Status.LoadBalancer.Ingress, api.LoadBalancerIngress{
-			IP: IP,
-		})
-		if _, err := ingClient.UpdateStatus(currIng); err != nil {
-			lbc.recorder.Eventf(currIng, api.EventTypeWarning, "UPDATE", "error: %v", err)
-			return
-		}
-
-		lbc.recorder.Eventf(currIng, api.EventTypeNormal, "CREATE", "ip: %v", IP)
+	publicEndpoints, err := lbc.lbProvider.GetPublicEndpoints(key)
+	if err != nil {
+		log.Infof("retrying fetching endpoints for ingress [%s]: [%v]", key, err)
+		lbc.ingQueue.Requeue(key, err)
+		return
 	}
 
-	// remove extra ips
-	for idx, lbStatus := range currIng.Status.LoadBalancer.Ingress {
-		for _, IP := range toRemove {
-			if IP == lbStatus.IP {
-				logrus.Infof("Updating ingress %v/%v. Removing IP %v", ing.Namespace, ing.Name, lbStatus.IP)
-
-				currIng.Status.LoadBalancer.Ingress = append(currIng.Status.LoadBalancer.Ingress[:idx],
-					currIng.Status.LoadBalancer.Ingress[idx+1:]...)
-				if _, err := ingClient.UpdateStatus(currIng); err != nil {
-					lbc.recorder.Eventf(currIng, api.EventTypeWarning, "UPDATE", "error: %v", err)
-					break
-				}
-				lbc.recorder.Eventf(currIng, api.EventTypeNormal, "DELETE", "ip: %v", lbStatus.IP)
-				break
-			}
+	updateNeeded := lbc.updateNeeded(lbIPs, publicEndpoints)
+	if updateNeeded {
+		log.Infof("Updating ingress %v/%v with endpoints %v", ing.Namespace, ing.Name, publicEndpoints)
+		var lbIngress []api.LoadBalancerIngress
+		for _, IP := range publicEndpoints {
+			lbIngress = append(lbIngress, api.LoadBalancerIngress{
+				IP: IP,
+			})
+		}
+		currIng.Status.LoadBalancer.Ingress = lbIngress
+		if _, err := ingClient.UpdateStatus(currIng); err != nil {
+			lbc.recorder.Eventf(currIng, api.EventTypeWarning, "UPDATE", "error: %v", err)
+			lbc.ingQueue.Requeue(key, err)
+			return
 		}
 	}
 }
 
-func (lbc *loadBalancerController) getIPsToAddRemove(lbings []api.LoadBalancerIngress, IPs []string) ([]string, []string) {
-	add := []string{}
-	remove := []string{}
-	//find entries to remove
-	for _, lbing := range lbings {
-		found := false
-		for _, IP := range IPs {
-			if lbing.IP == IP {
-				found = true
-				break
-			}
-		}
-		if !found {
-			remove = append(remove, lbing.IP)
-		}
-	}
-	// find entries to add
+func (lbc *loadBalancerController) updateNeeded(ingressIPs []api.LoadBalancerIngress, IPs []string) bool {
+	IPMap := map[string]bool{}
+	ingressIPMap := map[string]bool{}
 	for _, IP := range IPs {
-		found := false
-		for _, lbing := range lbings {
-			if lbing.IP == IP {
-				found = true
-			}
-		}
-		if !found {
-			add = append(add, IP)
-		}
+		IPMap[IP] = true
 	}
-	return add, remove
+
+	for _, ingressIP := range ingressIPs {
+		ingressIPMap[ingressIP.IP] = true
+	}
+	return !reflect.DeepEqual(IPMap, ingressIPMap)
 }
 
 func (lbc *loadBalancerController) isStatusIPDefined(lbings []api.LoadBalancerIngress, IP string) bool {
@@ -355,41 +396,39 @@ func (lbc *loadBalancerController) isStatusIPDefined(lbings []api.LoadBalancerIn
 	return false
 }
 
-func (lbc *loadBalancerController) getPublicEndpoints(key string) []string {
-	providerEP := lbc.lbProvider.GetPublicEndpoints(key)
-	return providerEP
-}
-
 // Starts a load balancer controller
 func (lbc *loadBalancerController) Run(provider provider.LBProvider) {
-	logrus.Infof("starting %s controller", lbc.GetName())
+	log.Infof("starting %s controller", lbc.GetName())
 	go lbc.ingController.Run(lbc.stopCh)
 	go lbc.endpController.Run(lbc.stopCh)
 	go lbc.svcController.Run(lbc.stopCh)
 
 	go lbc.syncQueue.Run(time.Second, lbc.stopCh)
 	go lbc.ingQueue.Run(time.Second, lbc.stopCh)
-	go lbc.cleanupQueue.Run(time.Second, lbc.stopCh)
 
 	lbc.lbProvider = provider
 	go lbc.lbProvider.Run(utils.NewTaskQueue(lbc.updateIngressStatus))
 
 	<-lbc.stopCh
-	logrus.Infof("shutting down %s controller", lbc.GetName())
+	log.Infof("shutting down %s controller", lbc.GetName())
 }
 
 func (lbc *loadBalancerController) GetLBConfigs() ([]*config.LoadBalancerConfig, error) {
 	ings := lbc.ingLister.Store.List()
-	lbConfigs := []*config.LoadBalancerConfig{}
+	var lbConfigs []*config.LoadBalancerConfig
 	if len(ings) == 0 {
 		return lbConfigs, nil
 	}
 	for _, ingIf := range ings {
 		ing := ingIf.(*extensions.Ingress)
+		if ing.DeletionTimestamp != nil {
+			continue
+		}
 		if !isRancherIngress(ing) {
 			continue
 		}
 		backends := []*config.BackendService{}
+		backendUUIDSvcMap := make(map[string]string)
 		// process default rule
 		if ing.Spec.Backend != nil {
 			svcName := ing.Spec.Backend.ServiceName
@@ -399,6 +438,7 @@ func (lbc *loadBalancerController) GetLBConfigs() ([]*config.LoadBalancerConfig,
 				backend := lbc.getServiceBackend(svc, svcPort, "", "")
 				if backend != nil {
 					backends = append(backends, backend)
+					backendUUIDSvcMap[backend.UUID] = svcName
 				}
 			}
 		}
@@ -408,7 +448,7 @@ func (lbc *loadBalancerController) GetLBConfigs() ([]*config.LoadBalancerConfig,
 			secretName := tls.SecretName
 			cert, err = lbc.getCertificate(secretName, ing.Namespace)
 			if err != nil {
-				logrus.Errorf("Failed to fetch secret by name [%s]: %v", secretName, err)
+				log.Errorf("Failed to fetch secret by name [%s]: %v", secretName, err)
 			} else {
 				//TODO - add SNI support
 				//today we get only first certificate
@@ -417,7 +457,7 @@ func (lbc *loadBalancerController) GetLBConfigs() ([]*config.LoadBalancerConfig,
 		}
 
 		for _, rule := range ing.Spec.Rules {
-			logrus.Debugf("Processing ingress rule %v", rule)
+			log.Debugf("Processing ingress rule %v", rule)
 			// process http rules only
 			if rule.IngressRuleValue.HTTP == nil {
 				continue
@@ -433,10 +473,11 @@ func (lbc *loadBalancerController) GetLBConfigs() ([]*config.LoadBalancerConfig,
 				backend := lbc.getServiceBackend(svc, path.Backend.ServicePort.IntValue(), path.Path, rule.Host)
 				if backend != nil {
 					backends = append(backends, backend)
+					backendUUIDSvcMap[backend.UUID] = svcName
 				}
 			}
 		}
-		frontEndServices := []*config.FrontendService{}
+		var frontEndServices []*config.FrontendService
 
 		// populate http service
 		params := ing.ObjectMeta.GetAnnotations()
@@ -475,6 +516,11 @@ func (lbc *loadBalancerController) GetLBConfigs() ([]*config.LoadBalancerConfig,
 			frontEndServices = append(frontEndServices, frontEndHTTPSService)
 		}
 
+		probeStr := params[livenessProbesLabel]
+		probeConfig, err := lbc.getProbeConfig(probeStr, frontEndServices, backendUUIDSvcMap)
+		if err != nil {
+			return nil, err
+		}
 		stickinessPolicyString := params[rancherStickinessPolicyLabel]
 
 		var stickinessPolicy *config.StickinessPolicy
@@ -505,15 +551,24 @@ func (lbc *loadBalancerController) GetLBConfigs() ([]*config.LoadBalancerConfig,
 					val := strings.TrimSpace(individualParam[1])
 					stickinessPolicy.Postonly = strings.EqualFold(val, "true")
 				default:
-					return nil, fmt.Errorf("Unknown stickiness policy param %s: %s", individualParam[0], individualParam[1])
+					return nil, fmt.Errorf("unknown stickiness policy param %s: %s", individualParam[0], individualParam[1])
 				}
+			}
+		}
+
+		customConfig := params["config"]
+		if probeConfig != "" {
+			if customConfig != "" {
+				customConfig = fmt.Sprintf("%s\n%s", customConfig, probeConfig)
+			} else {
+				customConfig = probeConfig
 			}
 		}
 
 		lbConfig := &config.LoadBalancerConfig{
 			Name:             fmt.Sprintf("%v/%v", ing.GetNamespace(), ing.Name),
 			FrontendServices: frontEndServices,
-			Config:           params["config"],
+			Config:           customConfig,
 			DefaultCert:      cert,
 			Annotations:      params,
 			StickinessPolicy: stickinessPolicy,
@@ -524,21 +579,113 @@ func (lbc *loadBalancerController) GetLBConfigs() ([]*config.LoadBalancerConfig,
 	return lbConfigs, nil
 }
 
+func (lbc *loadBalancerController) getProbeConfig(probeStr string, frontEndServices []*config.FrontendService, backendUUIDSvcMap map[string]string) (string, error) {
+	var probeConfig string
+
+	if probeStr != "" {
+		livenessProbeMap := make(map[string]*Probe)
+		err := json.Unmarshal([]byte(probeStr), &livenessProbeMap)
+		if err != nil {
+			return "", fmt.Errorf("error unmarshaling k8s livenessProbes: %v err: %v", probeStr, err)
+		}
+		if len(livenessProbeMap) == 0 {
+			return "", fmt.Errorf("no k8s livenessProbes found in the label: %v", probeStr)
+		}
+		// form the custom config
+		svcBackendNameMap := lbc.createSvcBackendNameMap(frontEndServices, backendUUIDSvcMap)
+		if svcBackendNameMap == nil {
+			return "", fmt.Errorf("error creating the service to backend names map")
+		}
+		var probeServicekeys []string
+		for service := range livenessProbeMap {
+			probeServicekeys = append(probeServicekeys, service)
+		}
+		sort.Strings(probeServicekeys)
+
+		for _, service := range probeServicekeys {
+			if _, ok := svcBackendNameMap[service]; !ok {
+				return "", fmt.Errorf("ingress spec seems to be missing backend service: %v from the livenessProbes %v", service, probeStr)
+			}
+			probeStruct := livenessProbeMap[service]
+			subConfig := "backend " + svcBackendNameMap[service]
+			port := 0
+
+			if probeStruct.TimeoutSeconds != 0 {
+				timeout := "timeout check"
+				subConfig = fmt.Sprintf("%s\n%s %d", subConfig, timeout, probeStruct.TimeoutSeconds*1000)
+			}
+
+			if probeStruct.HTTPGet != nil {
+				httpchk := "option httpchk"
+				if probeStruct.HTTPGet.Path != "" {
+					qpath := "\"" + probeStruct.HTTPGet.Path + "\""
+					httpversion := "\"" + "HTTP/1.0" + "\""
+					httpchk = fmt.Sprintf("%s GET %s %s", httpchk, qpath, httpversion)
+				}
+				subConfig = fmt.Sprintf("%s\n%s", subConfig, httpchk)
+				port = probeStruct.HTTPGet.Port
+			} else if probeStruct.TCPSocket != nil {
+				tcpchk := "option tcp-check"
+				subConfig = fmt.Sprintf("%s\n%s", subConfig, tcpchk)
+				port = probeStruct.TCPSocket.Port
+			} else {
+				return "", fmt.Errorf("missing HTTP or TCP probes for service: %v in the livenessProbes %v", service, probeStr)
+			}
+			server := "server $IP check"
+			if port != 0 {
+				server = fmt.Sprintf("%s port %d", server, port)
+			}
+			if probeStruct.PeriodSeconds != 0 {
+				server = fmt.Sprintf("%s inter %d", server, probeStruct.PeriodSeconds*1000)
+			}
+			if probeStruct.SuccessThreshold != 0 {
+				server = fmt.Sprintf("%s rise %d", server, probeStruct.SuccessThreshold)
+			}
+			if probeStruct.FailureThreshold != 0 {
+				server = fmt.Sprintf("%s fall %d", server, probeStruct.FailureThreshold)
+			}
+			subConfig = fmt.Sprintf("%s\n %s", subConfig, server)
+			if probeConfig == "" {
+				probeConfig = subConfig
+			} else {
+				probeConfig = fmt.Sprintf("%s\n%s", probeConfig, subConfig)
+			}
+		}
+	}
+	return probeConfig, nil
+}
+
+func (lbc *loadBalancerController) createSvcBackendNameMap(frontendServices []*config.FrontendService, backendUUIDSvcMap map[string]string) map[string]string {
+
+	svcBackendNameMap := make(map[string]string)
+
+	for _, fe := range frontendServices {
+		for _, bcknd := range fe.BackendServices {
+			bName := config.FormulateBackendName(int64(fe.Port), bcknd.Host, bcknd.Path)
+			svcName := backendUUIDSvcMap[bcknd.UUID]
+
+			svcBackendNameMap[svcName] = bName
+		}
+	}
+
+	return svcBackendNameMap
+}
+
 func (lbc *loadBalancerController) getCertificate(secretName string, namespace string) (*config.Certificate, error) {
 	fetch := false
 	var cert, key string
 	secret, err := lbc.client.Secrets(namespace).Get(secretName)
 	if err != nil {
-		logrus.Debugf("Cert [%s] needs to be fetched: %v", secretName, err)
+		log.Debugf("Cert [%s] needs to be fetched: %v", secretName, err)
 		fetch = true
 	} else {
 		certData, ok := secret.Data[api.TLSCertKey]
 		if !ok {
-			return nil, fmt.Errorf("Secret %v has no cert", secretName)
+			return nil, fmt.Errorf("secret %v has no cert", secretName)
 		}
 		keyData, ok := secret.Data[api.TLSPrivateKeyKey]
 		if !ok {
-			return nil, fmt.Errorf("Secret %v has no private key", secretName)
+			return nil, fmt.Errorf("secret %v has no private key", secretName)
 		}
 		cert = string(certData)
 		key = string(keyData)
@@ -578,12 +725,12 @@ func (lbc *loadBalancerController) getService(svcName string, namespace string) 
 	svcKey := fmt.Sprintf("%v/%v", namespace, svcName)
 	svcObj, svcExists, err := lbc.svcLister.Store.GetByKey(svcKey)
 	if err != nil {
-		logrus.Infof("error getting service [%s] from the cache: %v", svcKey, err)
+		log.Infof("error getting service [%s] from the cache: %v", svcKey, err)
 		return nil, err
 	}
 
 	if !svcExists {
-		logrus.Debugf("service [%s] does not exists", svcKey)
+		log.Debugf("service [%s] does not exists", svcKey)
 		return nil, nil
 	}
 
@@ -595,10 +742,10 @@ func (lbc *loadBalancerController) getService(svcName string, namespace string) 
 func (lbc *loadBalancerController) getEndpoints(s *api.Service, servicePort intstr.IntOrString, proto api.Protocol) []*config.Endpoint {
 	ep, err := lbc.endpLister.GetServiceEndpoints(s)
 	if err != nil {
-		logrus.Warningf("unexpected error getting service endpoints: %v", err)
+		log.Errorf("unexpected error getting service endpoints: %v", err)
 		return []*config.Endpoint{}
 	}
-	lbEndpoints := []*config.Endpoint{}
+	var lbEndpoints []*config.Endpoint
 	for _, ss := range ep.Subsets {
 		for _, epPort := range ss.Ports {
 			if !reflect.DeepEqual(epPort.Protocol, proto) {
@@ -649,8 +796,7 @@ func (lbc *loadBalancerController) Stop() error {
 		lbc.shutdown = true
 		lbc.syncQueue.Shutdown()
 		lbc.ingQueue.Shutdown()
-		lbc.cleanupQueue.Shutdown()
-		logrus.Infof("shut down controller queues")
+		log.Infof("shut down controller queues")
 		return nil
 	}
 
@@ -659,19 +805,19 @@ func (lbc *loadBalancerController) Stop() error {
 
 func (lbc *loadBalancerController) removeFromIngress() {
 	ings := lbc.ingLister.Store.List()
-	logrus.Infof("updating %v Ingress rule/s", len(ings))
+	log.Infof("updating %v Ingress rule/s", len(ings))
 	for _, cur := range ings {
 		ing := cur.(*extensions.Ingress)
 
 		ingClient := lbc.client.Extensions().Ingress(ing.Namespace)
 		currIng, err := ingClient.Get(ing.Name)
 		if err != nil {
-			logrus.Errorf("unexpected error searching Ingress %v/%v: %v", ing.Namespace, ing.Name, err)
+			log.Errorf("unexpected error searching Ingress %v/%v: %v", ing.Namespace, ing.Name, err)
 			continue
 		}
 
 		for idx, lbStatus := range currIng.Status.LoadBalancer.Ingress {
-			logrus.Infof("Updating ingress %v/%v. Removing IP %v", ing.Namespace, ing.Name, lbStatus.IP)
+			log.Infof("Updating ingress %v/%v. Removing IP %v", ing.Namespace, ing.Name, lbStatus.IP)
 
 			currIng.Status.LoadBalancer.Ingress = append(currIng.Status.LoadBalancer.Ingress[:idx],
 				currIng.Status.LoadBalancer.Ingress[idx+1:]...)
@@ -691,7 +837,7 @@ func (lbc *loadBalancerController) GetName() string {
 func (lbc *loadBalancerController) IsHealthy() bool {
 	_, err := lbc.client.Extensions().Ingress(api.NamespaceAll).List(api.ListOptions{})
 	if err != nil {
-		logrus.Errorf("Health check failed: unable to reach Kubernetes. Error: %#v", err)
+		log.Errorf("Health check failed: unable to reach Kubernetes. Error: %#v", err)
 		return false
 	}
 	return true
