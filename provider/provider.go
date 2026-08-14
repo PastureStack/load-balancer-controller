@@ -11,12 +11,17 @@ const Localhost = "localhost"
 type LBProvider interface {
 	ApplyConfig(lbConfig *config.LoadBalancerConfig) error
 	GetName() string
-	GetPublicEndpoints(configName string) []string
+	GetPublicEndpoints(configName string) ([]string, error)
 	CleanupConfig(configName string) error
 	Run(syncEndpointsQueue *utils.TaskQueue)
 	Stop() error
 	IsHealthy() bool
 	ProcessCustomConfig(lbConfig *config.LoadBalancerConfig, customConfig string) error
+	IsEndpointUpForDrain(*config.Endpoint) bool
+	DrainEndpoint(*config.Endpoint) bool
+	IsEndpointDrained(*config.Endpoint) bool
+	RemoveEndpointFromDrain(ep *config.Endpoint)
+	GetExistingConfigNames() (map[string]bool, error)
 }
 
 var (

@@ -6,7 +6,7 @@ import (
 	"strings"
 
 	"github.com/rancher/lb-controller/config"
-	//"github.com/Sirupsen/logrus"
+	//"github.com/rancher/log"
 )
 
 func GetDefaultConfig() map[string]map[string]string {
@@ -16,14 +16,16 @@ func GetDefaultConfig() map[string]map[string]string {
 
 	global["maxconn"] = "4096"
 	global["maxpipes"] = "1024"
-	global["tune.ssl.default-dh-param"] = "2048"
-	global["ssl-default-bind-ciphers"] = "ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES256-GCM-SHA384:ECDHE-ECDSA-AES256-GCM-SHA384:DHE-RSA-AES128-GCM-SHA256:DHE-DSS-AES128-GCM-SHA256:kEDH+AESGCM:ECDHE-RSA-AES128-SHA256:ECDHE-ECDSA-AES128-SHA256:ECDHE-RSA-AES128-SHA:ECDHE-ECDSA-AES128-SHA:ECDHE-RSA-AES256-SHA384:ECDHE-ECDSA-AES256-SHA384:ECDHE-RSA-AES256-SHA:ECDHE-ECDSA-AES256-SHA:DHE-RSA-AES128-SHA256:DHE-RSA-AES128-SHA:DHE-DSS-AES128-SHA256:DHE-RSA-AES256-SHA256:DHE-DSS-AES256-SHA:DHE-RSA-AES256-SHA:ECDHE-RSA-DES-CBC3-SHA:ECDHE-ECDSA-DES-CBC3-SHA:AES128-GCM-SHA256:AES256-GCM-SHA384:AES128-SHA256:AES256-SHA256:AES128-SHA:AES256-SHA:AES:CAMELLIA:DES-CBC3-SHA:!aNULL:!eNULL:!EXPORT:!DES:!RC4:!MD5:!PSK:!aECDH:!EDH-DSS-DES-CBC3-SHA:!EDH-RSA-DES-CBC3-SHA:!KRB5-DES-CBC3-SHA"
-	global["ssl-default-server-ciphers"] = "ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES256-GCM-SHA384:ECDHE-ECDSA-AES256-GCM-SHA384:DHE-RSA-AES128-GCM-SHA256:DHE-DSS-AES128-GCM-SHA256:kEDH+AESGCM:ECDHE-RSA-AES128-SHA256:ECDHE-ECDSA-AES128-SHA256:ECDHE-RSA-AES128-SHA:ECDHE-ECDSA-AES128-SHA:ECDHE-RSA-AES256-SHA384:ECDHE-ECDSA-AES256-SHA384:ECDHE-RSA-AES256-SHA:ECDHE-ECDSA-AES256-SHA:DHE-RSA-AES128-SHA256:DHE-RSA-AES128-SHA:DHE-DSS-AES128-SHA256:DHE-RSA-AES256-SHA256:DHE-DSS-AES256-SHA:DHE-RSA-AES256-SHA:ECDHE-RSA-DES-CBC3-SHA:ECDHE-ECDSA-DES-CBC3-SHA:AES128-GCM-SHA256:AES256-GCM-SHA384:AES128-SHA256:AES256-SHA256:AES128-SHA:AES256-SHA:AES:CAMELLIA:DES-CBC3-SHA:!aNULL:!eNULL:!EXPORT:!DES:!RC4:!MD5:!PSK:!aECDH:!EDH-DSS-DES-CBC3-SHA:!EDH-RSA-DES-CBC3-SHA:!KRB5-DES-CBC3-SHA"
-	global["ssl-default-bind-options"] = "no-sslv3 no-tlsv10"
+	// The default configuration for supported SSL protocols, ciphers and server order preference
+	// is based off of the AWS ELB security policy 'TLS-1-1-2017-01'.
+	// See docs.aws.amazon.com/elasticloadbalancing/latest/classic/elb-security-policy-table.html
+	global["ssl-default-bind-ciphers"] = "ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES128-SHA256:ECDHE-RSA-AES128-SHA256:ECDHE-ECDSA-AES128-SHA:ECDHE-RSA-AES128-SHA:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384:ECDHE-ECDSA-AES256-SHA384:ECDHE-RSA-AES256-SHA384:ECDHE-RSA-AES256-SHA:ECDHE-ECDSA-AES256-SHA:AES128-GCM-SHA256:AES128-SHA256:AES128-SHA:AES256-GCM-SHA384:AES256-SHA256:AES256-SHA"
+	global["ssl-default-server-ciphers"] = "ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES128-SHA256:ECDHE-RSA-AES128-SHA256:ECDHE-ECDSA-AES128-SHA:ECDHE-RSA-AES128-SHA:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384:ECDHE-ECDSA-AES256-SHA384:ECDHE-RSA-AES256-SHA384:ECDHE-RSA-AES256-SHA:ECDHE-ECDSA-AES256-SHA:AES128-GCM-SHA256:AES128-SHA256:AES128-SHA:AES256-GCM-SHA384:AES256-SHA256:AES256-SHA"
+	global["ssl-default-bind-options"] = "no-sslv3 no-tlsv10 no-tls-tickets"
 	global["chroot"] = "/var/lib/haproxy"
-	global["user haproxy"] = ""
-	global["group haproxy"] = ""
 	global["daemon"] = ""
+	global["stats socket"] = "/run/haproxy/haproxy.sock mode 600 level admin"
+	global["stats timeout"] = "2m"
 
 	defaults["mode"] = "tcp"
 	defaults["option redispatch"] = ""
@@ -90,7 +92,7 @@ func isDirective(directive string) bool {
 	return false
 }
 
-func BuildCustomConfig(lbConfig *config.LoadBalancerConfig, customConfig string) error {
+func BuildCustomConfig(lbConfig *config.LoadBalancerConfig, customConfig string, drainMgr drainManager) error {
 	customConfigMap := make(map[string][]string)
 	var key string
 	defaultConfig := GetDefaultConfig()
@@ -227,6 +229,12 @@ func BuildCustomConfig(lbConfig *config.LoadBalancerConfig, customConfig string)
 				//append cookie policy
 				if policy != nil {
 					ep.Config = fmt.Sprintf("%s cookie %s", ep.Config, ep.Name)
+				}
+
+				//check if the endpoint is in drain list. If yes then add weight 0 to ep.Config
+				inDrainList, _ := drainMgr.isEndpointUpForDrain(ep)
+				if inDrainList || (ep.Weight != 1 && ep.Weight >= 0 && ep.Weight < 257) {
+					ep.Config = fmt.Sprintf("%s weight %d", ep.Config, ep.Weight)
 				}
 			}
 		}

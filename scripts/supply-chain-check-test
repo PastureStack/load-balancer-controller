@@ -1,0 +1,177 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+root_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+temporary_dir="$(mktemp -d)"
+trap 'rm -rf "${temporary_dir}"' EXIT
+fixture="${temporary_dir}/repository"
+
+"${root_dir}/scripts/supply-chain-check"
+
+mkdir -p \
+    "${fixture}/.github/workflows" \
+    "${fixture}/examples" \
+    "${fixture}/package/haproxy" \
+    "${fixture}/package/rancher" \
+    "${fixture}/scripts"
+cp -a "${root_dir}/Dockerfile.dapper" "${root_dir}/Makefile" \
+    "${root_dir}/supply-chain.lock" "${root_dir}/ubuntu-apt.lock" "${fixture}/"
+cp -a "${root_dir}/.github/workflows/." "${fixture}/.github/workflows/"
+cp -a "${root_dir}/examples/." "${fixture}/examples/"
+cp -a "${root_dir}/package/haproxy/Dockerfile" \
+    "${root_dir}/package/haproxy/ubuntu-apt.lock" "${fixture}/package/haproxy/"
+cp -a "${root_dir}/package/rancher/Dockerfile" \
+    "${root_dir}/package/rancher/ubuntu-apt.lock" "${fixture}/package/rancher/"
+cp -a "${root_dir}/scripts/build" "${root_dir}/scripts/package" \
+    "${root_dir}/scripts/entry" "${fixture}/scripts/"
+
+marker="${temporary_dir}/malicious-payload-executed"
+printf "UBUNTU_APT_CURL_VERSION='\$(touch %s)'\n" "${marker}" >> "${fixture}/ubuntu-apt.lock"
+if PASTURESTACK_SUPPLY_CHAIN_ROOT="${fixture}" \
+    "${root_dir}/scripts/supply-chain-check" >/dev/null 2>&1; then
+    printf 'Supply-chain checker accepted a malicious APT lock payload.\n' >&2
+    exit 1
+fi
+test ! -e "${marker}"
+
+cp -a "${root_dir}/ubuntu-apt.lock" "${fixture}/ubuntu-apt.lock"
+sed -i 's/curl="${UBUNTU_APT_CURL_VERSION}" \\/curl \\/' "${fixture}/Dockerfile.dapper"
+if PASTURESTACK_SUPPLY_CHAIN_ROOT="${fixture}" \
+    "${root_dir}/scripts/supply-chain-check" >/dev/null 2>&1; then
+    printf 'Supply-chain checker accepted an unversioned direct APT package.\n' >&2
+    exit 1
+fi
+
+cp -a "${root_dir}/Dockerfile.dapper" "${fixture}/Dockerfile.dapper"
+cp -a "${root_dir}/scripts/build" "${fixture}/scripts/build"
+sed -i 's/go build -trimpath/go build/' "${fixture}/scripts/build"
+if PASTURESTACK_SUPPLY_CHAIN_ROOT="${fixture}" \
+    "${root_dir}/scripts/supply-chain-check" >/dev/null 2>&1; then
+    printf 'Supply-chain checker accepted a path-dependent product build.\n' >&2
+    exit 1
+fi
+cp -a "${root_dir}/scripts/build" "${fixture}/scripts/build"
+
+cp -a "${root_dir}/Dockerfile.dapper" "${fixture}/Dockerfile.dapper"
+sed -i '0,/Verify-Peer "true"/s//Verify-Peer "false"/' "${fixture}/Dockerfile.dapper"
+if PASTURESTACK_SUPPLY_CHAIN_ROOT="${fixture}" \
+    "${root_dir}/scripts/supply-chain-check" >/dev/null 2>&1; then
+    printf 'Supply-chain checker accepted disabled TLS peer verification.\n' >&2
+    exit 1
+fi
+
+cp -a "${root_dir}/Dockerfile.dapper" "${fixture}/Dockerfile.dapper"
+sed -i '/COPY --from=docker-cli .*docker-buildx/d' "${fixture}/Dockerfile.dapper"
+if PASTURESTACK_SUPPLY_CHAIN_ROOT="${fixture}" \
+    "${root_dir}/scripts/supply-chain-check" >/dev/null 2>&1; then
+    printf 'Supply-chain checker accepted a Dapper image without the required Buildx plugin.\n' >&2
+    exit 1
+fi
+
+cp -a "${root_dir}/Dockerfile.dapper" "${fixture}/Dockerfile.dapper"
+sed -i 's/docker --version/docker version --format version/' "${fixture}/Dockerfile.dapper"
+if PASTURESTACK_SUPPLY_CHAIN_ROOT="${fixture}" \
+    "${root_dir}/scripts/supply-chain-check" >/dev/null 2>&1; then
+    printf 'Supply-chain checker accepted Docker CLI verification that requires a daemon.\n' >&2
+    exit 1
+fi
+
+cp -a "${root_dir}/Dockerfile.dapper" "${fixture}/Dockerfile.dapper"
+sed -i '/DOCKER_CONFIG=\/tmp\/docker-config/d' "${fixture}/Dockerfile.dapper"
+if PASTURESTACK_SUPPLY_CHAIN_ROOT="${fixture}" \
+    "${root_dir}/scripts/supply-chain-check" >/dev/null 2>&1; then
+    printf 'Supply-chain checker accepted a Dapper image that writes Docker state into the mounted source tree.\n' >&2
+    exit 1
+fi
+
+cp -a "${root_dir}/.github/workflows/codeql-verification.yml" \
+    "${fixture}/.github/workflows/codeql-verification.yml"
+sed -i "s/upload: \${{ github.ref == 'refs\/heads\/main' && 'always' || 'never' }}/upload: never/" \
+    "${fixture}/.github/workflows/codeql-verification.yml"
+if PASTURESTACK_SUPPLY_CHAIN_ROOT="${fixture}" \
+    "${root_dir}/scripts/supply-chain-check" >/dev/null 2>&1; then
+    printf 'Supply-chain checker accepted CodeQL results that are never published for main.\n' >&2
+    exit 1
+fi
+
+cp -a "${root_dir}/.github/workflows/security-release-gate.yml" \
+    "${fixture}/.github/workflows/security-release-gate.yml"
+sed -i '/--vex \/work\/evidence\/openvex.json --show-suppressed/d' \
+    "${fixture}/.github/workflows/security-release-gate.yml"
+if PASTURESTACK_SUPPLY_CHAIN_ROOT="${fixture}" \
+    "${root_dir}/scripts/supply-chain-check" >/dev/null 2>&1; then
+    printf 'Supply-chain checker accepted a security workflow without reviewed VEX enforcement.\n' >&2
+    exit 1
+fi
+cp -a "${root_dir}/.github/workflows/security-release-gate.yml" \
+    "${fixture}/.github/workflows/security-release-gate.yml"
+
+sed -i 's/sha256:62b1e65e8869bc4b4c6aa4fa2b21595256c7c2f6018a9d9ad61caf87187c1969/sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/' \
+    "${fixture}/.github/workflows/security-release-gate.yml"
+if PASTURESTACK_SUPPLY_CHAIN_ROOT="${fixture}" \
+    "${root_dir}/scripts/supply-chain-check" >/dev/null 2>&1; then
+    printf 'Supply-chain checker accepted a substituted Trivy image digest.\n' >&2
+    exit 1
+fi
+cp -a "${root_dir}/.github/workflows/security-release-gate.yml" \
+    "${fixture}/.github/workflows/security-release-gate.yml"
+
+cp -a "${root_dir}/scripts/entry" "${fixture}/scripts/entry"
+sed -i 's/    \"\$@\"/    exec \"\$@\"/' "${fixture}/scripts/entry"
+if PASTURESTACK_SUPPLY_CHAIN_ROOT="${fixture}" \
+    "${root_dir}/scripts/supply-chain-check" >/dev/null 2>&1; then
+    printf 'Supply-chain checker accepted an entrypoint that bypasses its ownership cleanup trap.\n' >&2
+    exit 1
+fi
+
+runtime_fixture="${temporary_dir}/entry-runtime"
+ownership_marker="${temporary_dir}/entry-ownership.log"
+command_marker="${temporary_dir}/entry-command.log"
+mkdir -p "${runtime_fixture}/scripts" "${runtime_fixture}/fake-bin"
+cp -a "${root_dir}/scripts/entry" "${runtime_fixture}/scripts/entry"
+cat > "${runtime_fixture}/fake-bin/chown" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\n' "$*" >> "${ENTRY_OWNERSHIP_MARKER:?}"
+EOF
+cat > "${runtime_fixture}/scripts/write-output" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+printf 'ran\n' > "${ENTRY_COMMAND_MARKER:?}"
+printf 'binary\n' > bin/lb-controller
+printf 'images\n' > dist/images
+mkdir -p evidence
+printf 'coverage\n' > evidence/coverage.out
+EOF
+chmod +x \
+    "${runtime_fixture}/fake-bin/chown" \
+    "${runtime_fixture}/scripts/entry" \
+    "${runtime_fixture}/scripts/write-output"
+(
+    cd "${runtime_fixture}"
+    PATH="${runtime_fixture}/fake-bin:${PATH}" \
+        ENTRY_OWNERSHIP_MARKER="${ownership_marker}" \
+        ENTRY_COMMAND_MARKER="${command_marker}" \
+        DAPPER_UID=1234 DAPPER_GID=5678 \
+        ./scripts/entry write-output
+)
+grep -Fxq 'ran' "${command_marker}"
+grep -Fxq -- '-R -- 1234:5678 bin' "${ownership_marker}"
+grep -Fxq -- '-R -- 1234:5678 dist' "${ownership_marker}"
+grep -Fxq -- '-R -- 1234:5678 evidence' "${ownership_marker}"
+
+rm -f "${command_marker}"
+if (
+    cd "${runtime_fixture}"
+    PATH="${runtime_fixture}/fake-bin:${PATH}" \
+        ENTRY_OWNERSHIP_MARKER="${ownership_marker}" \
+        ENTRY_COMMAND_MARKER="${command_marker}" \
+        DAPPER_UID='1234:0' DAPPER_GID=5678 \
+        ./scripts/entry write-output >/dev/null 2>&1
+); then
+    printf 'Dapper entrypoint accepted a non-numeric user identifier.\n' >&2
+    exit 1
+fi
+test ! -e "${command_marker}"
+
+printf 'Supply-chain legitimate and malicious-boundary tests passed.\n'

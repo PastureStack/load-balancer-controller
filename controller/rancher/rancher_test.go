@@ -1,12 +1,15 @@
 package rancher
 
 import (
+	"strings"
+	"testing"
+
+	"fmt"
+
 	"github.com/rancher/go-rancher-metadata/metadata"
 	"github.com/rancher/go-rancher/v2"
 	"github.com/rancher/lb-controller/config"
 	utils "github.com/rancher/lb-controller/utils"
-	"strings"
-	"testing"
 )
 
 var lbc *LoadBalancerController
@@ -548,8 +551,14 @@ func (mf tMetaFetcher) GetContainer(envUUID string, containerName string) (*meta
 	return nil, nil
 }
 
-func (mf tMetaFetcher) GetService(envUUID string, svcName string, stackName string) (*metadata.Service, error) {
+func (mf tMetaFetcher) GetRegionName() (string, error) {
+	return "", nil
+}
+
+func (mf tMetaFetcher) GetService(link string) (*metadata.Service, error) {
 	var svc *metadata.Service
+	splitSvcName := strings.Split(link, "/")
+	svcName := splitSvcName[1]
 	if strings.EqualFold(svcName, "foo") {
 		svc = &metadata.Service{
 			Kind:       "service",
@@ -722,6 +731,31 @@ func (mf tMetaFetcher) GetSelfHostUUID() (string, error) {
 func (mf tMetaFetcher) OnChange(intervalSeconds int, do func(string)) {
 }
 
+func (mf tMetaFetcher) GetServicesFromRegionEnvironment(regionName string, envName string) ([]metadata.Service, error) {
+	var svcs []metadata.Service
+	return svcs, nil
+}
+
+func (mf tMetaFetcher) GetServicesInLocalRegion(envName string) ([]metadata.Service, error) {
+	var svcs []metadata.Service
+	return svcs, nil
+}
+
+func (mf tMetaFetcher) GetServiceFromRegionEnvironment(regionName string, envName string, stackName string, svcName string) (metadata.Service, error) {
+	var svc metadata.Service
+	return svc, nil
+}
+
+func (mf tMetaFetcher) GetServiceInLocalRegion(envName string, stackName string, svcName string) (metadata.Service, error) {
+	var svc metadata.Service
+	return svc, nil
+}
+
+func (mf tMetaFetcher) GetServiceInLocalEnvironment(stackName string, svcName string) (metadata.Service, error) {
+	var svc metadata.Service
+	return svc, nil
+}
+
 func (cf tCertFetcher) FetchCertificates(lbMeta *LBMetadata, isDefaultCert bool) ([]*config.Certificate, error) {
 	return nil, nil
 }
@@ -752,8 +786,23 @@ func (p *tProvider) GetName() string {
 	return ""
 }
 
-func (p *tProvider) GetPublicEndpoints(configName string) []string {
-	return []string{}
+func (p *tProvider) DrainEndpoint(ep *config.Endpoint) bool {
+	return false
+}
+
+func (p *tProvider) IsEndpointUpForDrain(ep *config.Endpoint) bool {
+	return false
+}
+
+func (p *tProvider) IsEndpointDrained(ep *config.Endpoint) bool {
+	return false
+}
+
+func (p *tProvider) RemoveEndpointFromDrain(ep *config.Endpoint) {
+}
+
+func (p *tProvider) GetPublicEndpoints(configName string) ([]string, error) {
+	return []string{}, nil
 }
 
 func (p *tProvider) CleanupConfig(configName string) error {
@@ -775,6 +824,10 @@ func (p *tProvider) ProcessCustomConfig(lbConfig *config.LoadBalancerConfig, cus
 	return nil
 }
 
+func (p *tProvider) GetExistingConfigNames() (map[string]bool, error) {
+	return nil, fmt.Errorf("method is not implemented")
+}
+
 func TestSelectorNoMatch(t *testing.T) {
 	portRules := []metadata.PortRule{}
 	port := metadata.PortRule{
@@ -787,7 +840,7 @@ func TestSelectorNoMatch(t *testing.T) {
 		PortRules: portRules,
 	}
 
-	lbc.processSelector(meta)
+	lbc.processSelector(meta, false)
 
 	configs, _ := lbc.BuildConfigFromMetadata("test", "", "", "any", meta)
 
@@ -808,7 +861,7 @@ func TestSelectorMatch(t *testing.T) {
 		PortRules: portRules,
 	}
 
-	lbc.processSelector(meta)
+	lbc.processSelector(meta, false)
 
 	configs, _ := lbc.BuildConfigFromMetadata("test", "", "", "any", meta)
 
@@ -859,7 +912,7 @@ func TestSelectorMatchNoTargetPort(t *testing.T) {
 		PortRules: portRules,
 	}
 
-	lbc.processSelector(meta)
+	lbc.processSelector(meta, false)
 
 	configs, _ := lbc.BuildConfigFromMetadata("test", "", "", "any", meta)
 

@@ -1,0 +1,67 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_root=$(cd "$(dirname "$0")/.." && pwd)
+temp_dir=$(mktemp -d)
+trap 'rm -rf "$temp_dir"' EXIT
+python_command=${PYTHON:-python3}
+if ! "$python_command" --version >/dev/null 2>&1; then
+  if command -v python >/dev/null 2>&1 && python --version >/dev/null 2>&1; then
+    python_command=python
+  else
+    printf 'A working Python 3 interpreter is required to verify OpenVEX.\n' >&2
+    exit 1
+  fi
+fi
+
+"$python_command" "$repo_root/scripts/generate-openvex" > "$temp_dir/openvex.json"
+go list -deps -test ./... > "$temp_dir/dependencies.txt"
+"$python_command" "$repo_root/scripts/verify-openvex.py" \
+  --vex "$temp_dir/openvex.json" \
+  --dependencies "$temp_dir/dependencies.txt"
+
+expect_rejected() {
+  local name=$1
+  shift
+  if "$@" >"$temp_dir/${name}.stdout" 2>"$temp_dir/${name}.stderr"; then
+    printf 'OpenVEX malicious fixture was accepted: %s\n' "$name" >&2
+    exit 1
+  fi
+}
+
+"$python_command" - "$temp_dir/openvex.json" "$temp_dir/missing-statement.json" <<'PY'
+import json
+import sys
+
+source, target = sys.argv[1:]
+data = json.load(open(source, encoding="utf-8"))
+data["statements"] = data["statements"][1:]
+json.dump(data, open(target, "w", encoding="utf-8"), indent=2)
+PY
+expect_rejected missing-statement \
+  "$python_command" "$repo_root/scripts/verify-openvex.py" \
+    --vex "$temp_dir/missing-statement.json"
+
+"$python_command" - "$temp_dir/openvex.json" "$temp_dir/widened-product.json" <<'PY'
+import json
+import sys
+
+source, target = sys.argv[1:]
+data = json.load(open(source, encoding="utf-8"))
+for statement in data["statements"]:
+    if statement["products"][0]["@id"] == "pkg:golang/stdlib@v1.26.5":
+        statement["products"][0]["@id"] = "pkg:golang/stdlib"
+json.dump(data, open(target, "w", encoding="utf-8"), indent=2)
+PY
+expect_rejected widened-product \
+  "$python_command" "$repo_root/scripts/verify-openvex.py" \
+    --vex "$temp_dir/widened-product.json"
+
+cp "$temp_dir/dependencies.txt" "$temp_dir/forbidden-dependencies.txt"
+printf '%s\n' 'k8s.io/kubernetes/pkg/apiserver' >> "$temp_dir/forbidden-dependencies.txt"
+expect_rejected forbidden-dependency \
+  "$python_command" "$repo_root/scripts/verify-openvex.py" \
+    --vex "$temp_dir/openvex.json" \
+    --dependencies "$temp_dir/forbidden-dependencies.txt"
+
+printf '%s\n' 'OpenVEX legitimate and malicious-boundary tests passed.'

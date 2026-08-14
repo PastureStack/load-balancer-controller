@@ -1,5 +1,11 @@
 #!/bin/bash
 
+if [ -n "${VERSION_OVERRIDE:-}" ]; then
+    VERSION="${VERSION_OVERRIDE}"
+    return 0
+fi
+
+DIRTY=""
 if [ -n "$(git status --porcelain --untracked-files=no)" ]; then
     DIRTY="-dirty"
 fi

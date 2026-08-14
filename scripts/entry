@@ -1,11 +1,48 @@
-#!/bin/bash
-set -e
+#!/usr/bin/env bash
+set -euo pipefail
 
-trap "chown -R $DAPPER_UID:$DAPPER_GID ." exit
+: "${DAPPER_UID:?DAPPER_UID is required}"
+: "${DAPPER_GID:?DAPPER_GID is required}"
+case "${DAPPER_UID}" in
+    *[!0-9]*)
+        printf 'DAPPER_UID and DAPPER_GID must be numeric.\n' >&2
+        exit 64
+        ;;
+esac
+case "${DAPPER_GID}" in
+    *[!0-9]*)
+        printf 'DAPPER_UID and DAPPER_GID must be numeric.\n' >&2
+        exit 64
+        ;;
+esac
+
+restore_output_ownership() {
+    local command_status=$?
+    local cleanup_status=0
+    local output
+
+    trap - EXIT
+    for output in bin dist evidence; do
+        if [ -e "${output}" ]; then
+            if [ -L "${output}" ]; then
+                printf 'Refusing to change ownership through symlink: %s\n' "${output}" >&2
+                cleanup_status=1
+                continue
+            fi
+            chown -R -- "${DAPPER_UID}:${DAPPER_GID}" "${output}" || cleanup_status=$?
+        fi
+    done
+
+    if [ "${command_status}" -ne 0 ]; then
+        exit "${command_status}"
+    fi
+    exit "${cleanup_status}"
+}
+trap restore_output_ownership EXIT
 
 mkdir -p bin dist
-if [ -e ./scripts/$1 ]; then
-    exec ./scripts/"$@"
+if [ -e "./scripts/$1" ]; then
+    ./scripts/"$@"
 else
-    exec "$@"
+    "$@"
 fi

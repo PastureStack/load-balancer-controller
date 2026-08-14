@@ -1,20 +1,38 @@
-#!/bin/bash
-set -e
+#!/usr/bin/env bash
+set -euo pipefail
 
-cd $(dirname $0)/..
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cd "${script_dir}/.."
+
+command -v go >/dev/null
+command -v gofmt >/dev/null
 
 echo Running validation
 
-PACKAGES=". $(find -name '*.go' | xargs -I{} dirname {} |  cut -f2 -d/ | sort -u | grep -Ev '(^\.$|.git|.trash-cache|vendor|bin)' | sed -e 's!^!./!' -e 's!$!/...!')"
+PACKAGES=". $(find -name '*.go' | xargs -I{} dirname {} |  cut -f2 -d/ | sort -u | grep -Ev '(^\.$|.git|vendor|bin)' | sed -e 's!^!./!' -e 's!$!/...!')"
 
 echo Running: go vet
 go vet ${PACKAGES}
-echo Running: golint
-for i in ${PACKAGES}; do
-    if [ -n "$(golint $i | grep -v 'should have comment.*or be unexported' | tee /dev/stderr)" ]; then
-        failed=true
-    fi
-done
-test -z "$failed"
-echo Running: go fmt
-test -z "$(go fmt ${PACKAGES} | tee /dev/stderr)"
+printf "%s\n" "Running supported validation: go vet and gofmt."
+echo Running: gofmt
+unformatted="$(find . -name '*.go' -not -path './.git/*' -not -path './vendor/*' -print0 \
+    | xargs -0 -r gofmt -l -s)"
+if [[ -n "${unformatted}" ]]; then
+    printf '%s\n' "${unformatted}" >&2
+    exit 1
+fi
+
+echo Running: vendor lock tests
+./scripts/vendor-lock-test
+
+echo Running: vendored license tests
+./scripts/vendor-licenses-test
+
+echo Running: supply-chain legitimate and malicious-boundary tests
+./scripts/supply-chain-check-test
+
+echo Running: OpenVEX legitimate and malicious-boundary tests
+./scripts/openvex-test
+
+echo Running: source SBOM tests
+./scripts/source-sbom-test

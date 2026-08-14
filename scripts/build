@@ -1,10 +1,13 @@
-#!/bin/bash
-set -e
+#!/usr/bin/env bash
+set -euo pipefail
 
-source $(dirname $0)/version
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "${script_dir}/version"
 
-cd $(dirname $0)/..
+cd "${script_dir}/.."
 
 mkdir -p bin
-[ "$(uname)" != "Darwin" ] && LINKFLAGS="-linkmode external -extldflags -static -s"
-CGO_ENABLED=0 go build -tags netgo -ldflags "-X main.VERSION=$VERSION $LINKFLAGS" -o bin/lb-controller
+LINKFLAGS="-s -w"
+CGO_ENABLED=0 go build -trimpath -tags netgo \
+    -ldflags "-buildid= -X main.VERSION=$VERSION $LINKFLAGS" \
+    -o bin/lb-controller

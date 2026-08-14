@@ -1,0 +1,31 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+root_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+temporary_dir="$(mktemp -d)"
+trap 'rm -rf "${temporary_dir}"' EXIT
+
+"${root_dir}/scripts/vendor-lock" --check
+"${root_dir}/scripts/vendor-licenses" "${temporary_dir}/bundle-a"
+"${root_dir}/scripts/vendor-licenses" "${temporary_dir}/bundle-b"
+diff -ru "${temporary_dir}/bundle-a" "${temporary_dir}/bundle-b"
+
+expected_modules="$(awk -F '\t' 'NR > 1 { print $1 }' "${root_dir}/vendor.lock" | LC_ALL=C sort -u | wc -l)"
+included_modules="$(awk -F '\t' 'NR > 1 { print $1 }' "${temporary_dir}/bundle-a/manifest.tsv" | LC_ALL=C sort -u | wc -l)"
+test "${expected_modules}" -eq 48
+test "${included_modules}" -eq "${expected_modules}"
+test -s "${temporary_dir}/bundle-a/github.com/rancher/go-rancher-metadata/LICENSE"
+test -s "${temporary_dir}/bundle-a/k8s.io/kubernetes/pkg/controller/framework/LICENSE"
+
+{
+    printf 'module\tpin\ttree_sha256\n'
+    printf '../outside\tv1.0.0\t%s\n' 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
+} > "${temporary_dir}/traversal.lock"
+mkdir "${temporary_dir}/malicious-output"
+if VENDOR_LOCK="${temporary_dir}/traversal.lock" \
+    "${root_dir}/scripts/vendor-licenses" "${temporary_dir}/malicious-output" >/dev/null 2>&1; then
+    printf 'A path-traversal module was accepted by the license bundler.\n' >&2
+    exit 1
+fi
+
+printf 'Vendored license legitimate and malicious-boundary tests passed.\n'

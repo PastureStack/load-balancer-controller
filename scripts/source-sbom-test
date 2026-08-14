@@ -1,0 +1,162 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+root_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+temporary_dir="$(mktemp -d)"
+trap 'rm -rf "${temporary_dir}"' EXIT
+python_bin="${PYTHON_BIN:-python3}"
+
+if ! "${python_bin}" --version >/dev/null 2>&1; then
+    if command -v python >/dev/null 2>&1 && python --version >/dev/null 2>&1; then
+        python_bin="python"
+    else
+        printf 'A working Python 3 interpreter is required to generate the source SBOM.\n' >&2
+        exit 1
+    fi
+fi
+
+"${python_bin}" "${root_dir}/scripts/source-sbom" "${temporary_dir}/source-a.cdx.json"
+"${python_bin}" "${root_dir}/scripts/source-sbom" "${temporary_dir}/source-b.cdx.json"
+cmp "${temporary_dir}/source-a.cdx.json" "${temporary_dir}/source-b.cdx.json"
+"${python_bin}" - "${temporary_dir}/source-a.cdx.json" "${root_dir}" "${temporary_dir}" <<'PY'
+import importlib.machinery
+import importlib.util
+import json
+import pathlib
+import sys
+
+sys.dont_write_bytecode = True
+
+path = pathlib.Path(sys.argv[1])
+root = pathlib.Path(sys.argv[2])
+temporary_dir = pathlib.Path(sys.argv[3])
+bom = json.loads(path.read_text(encoding="utf-8"))
+assert bom["bomFormat"] == "CycloneDX"
+assert bom["specVersion"] == "1.6"
+assert bom["metadata"]["component"]["version"] == "0.9.26"
+assert len(bom["components"]) == 94
+assert len(bom["dependencies"]) == 95
+serialized = path.read_text(encoding="utf-8")
+windows_user_root = "C:" + "\\" + "Users" + "\\"
+unix_user_root = "/" + "home" + "/"
+assert windows_user_root not in serialized
+assert unix_user_root not in serialized
+assert all(component.get("version") for component in bom["components"])
+assert all(component.get("bom-ref") for component in bom["components"])
+assert len({component["bom-ref"] for component in bom["components"]}) == 94
+vendor_components = [component for component in bom["components"] if component.get("purl", "").startswith("pkg:golang/")]
+assert len(vendor_components) == 48
+assert all(
+    any(prop.get("name") == "pasturestack:vendor-license-files" for prop in component.get("properties", []))
+    for component in vendor_components
+)
+metadata_component = next(component for component in vendor_components if component["name"] == "go-rancher-metadata")
+assert metadata_component["licenses"] == [{"license": {"id": "Apache-2.0"}}]
+assert metadata_component["externalReferences"][0]["type"] == "license"
+
+expected_vendor_updates = {
+    "go-restful": (
+        "v1.2-75-gb14c3a9",
+        "2198209773be97a5fa57accc416db77a5f6ad24ebf6d3f9444babf4f1771b086",
+    ),
+    "protobuf": (
+        "v1.3.2",
+        "3282be0f62a4fbb3630a268ddcbdec8509dd267421d266da39476308b0193620",
+    ),
+    "websocket": (
+        "v1.5.3",
+        "525877e47177bebba77aef48cc72c300ac03358c2db0a55f9a327e04ed1c51dc",
+    ),
+}
+for name, (version, tree_hash) in expected_vendor_updates.items():
+    component = next(item for item in vendor_components if item["name"] == name)
+    assert component["version"] == version
+    assert component["hashes"] == [{"alg": "SHA-256", "content": tree_hash}]
+
+apt_components = [
+    component
+    for component in bom["components"]
+    if component.get("purl", "").startswith("pkg:deb/ubuntu/")
+]
+assert len(apt_components) == 31
+assert all(
+    any(
+        prop.get("name") == "pasturestack:ubuntu-snapshot"
+        and prop.get("value") == "20260814T000000Z"
+        for prop in component.get("properties", [])
+    )
+    for component in apt_components
+)
+ca_component = next(component for component in apt_components if component["name"] == "ca-certificates")
+assert ca_component["version"] == "20260601~26.04.1"
+python_component = next(component for component in apt_components if component["name"] == "python3")
+assert python_component["version"] == "3.14.3-0ubuntu2"
+lock_property = next(
+    prop for prop in ca_component["properties"] if prop["name"] == "pasturestack:apt-lock-files"
+)
+assert lock_property["value"] == "package/haproxy/ubuntu-apt.lock,package/rancher/ubuntu-apt.lock,ubuntu-apt.lock"
+
+loader = importlib.machinery.SourceFileLoader(
+    "pasturestack_source_sbom", str(root / "scripts" / "source-sbom")
+)
+spec = importlib.util.spec_from_loader(loader.name, loader)
+source_sbom = importlib.util.module_from_spec(spec)
+loader.exec_module(source_sbom)
+
+
+def expect_lock_failure(paths):
+    try:
+        source_sbom.read_apt_locks(paths)
+    except SystemExit:
+        return
+    raise AssertionError("malicious or inconsistent APT lock was accepted")
+
+
+legitimate = temporary_dir / "legitimate.lock"
+legitimate.write_text(
+    "UBUNTU_APT_SNAPSHOT='20260814T000000Z'\n"
+    "UBUNTU_APT_CURL_VERSION='8.18.0-1ubuntu2.3'\n",
+    encoding="utf-8",
+)
+records = source_sbom.read_apt_locks([legitimate])
+assert [(record["name"], record["version"]) for record in records] == [
+    ("curl", "8.18.0-1ubuntu2.3")
+]
+
+marker = temporary_dir / "malicious-payload-executed"
+malicious = temporary_dir / "malicious.lock"
+malicious.write_text(
+    "UBUNTU_APT_SNAPSHOT='20260814T000000Z'\n"
+    f"UBUNTU_APT_CURL_VERSION='$(touch {marker})'\n",
+    encoding="utf-8",
+)
+expect_lock_failure([malicious])
+assert not marker.exists()
+
+duplicate = temporary_dir / "duplicate.lock"
+duplicate.write_text(
+    "UBUNTU_APT_SNAPSHOT='20260814T000000Z'\n"
+    "UBUNTU_APT_CURL_VERSION='8.18.0-1ubuntu2.3'\n"
+    "UBUNTU_APT_CURL_VERSION='8.18.0-1ubuntu2.3'\n",
+    encoding="utf-8",
+)
+expect_lock_failure([duplicate])
+
+conflict = temporary_dir / "conflict.lock"
+conflict.write_text(
+    "UBUNTU_APT_SNAPSHOT='20260814T000000Z'\n"
+    "UBUNTU_APT_CURL_VERSION='8.18.0-1ubuntu2.2'\n",
+    encoding="utf-8",
+)
+expect_lock_failure([legitimate, conflict])
+
+unknown = temporary_dir / "unknown.lock"
+unknown.write_text(
+    "UBUNTU_APT_SNAPSHOT='20260814T000000Z'\n"
+    "UBUNTU_APT_UNKNOWN_VERSION='1.0.0'\n",
+    encoding="utf-8",
+)
+expect_lock_failure([unknown])
+PY
+
+printf 'Deterministic CycloneDX source SBOM legitimate and malicious-boundary tests passed.\n'

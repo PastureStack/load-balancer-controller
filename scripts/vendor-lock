@@ -1,0 +1,168 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+root_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+manifest_file="${VENDOR_MANIFEST:-${root_dir}/trash.conf}"
+vendor_root="${VENDOR_ROOT:-${root_dir}/vendor}"
+mode="${1:---check}"
+lock_file="${2:-${root_dir}/vendor.lock}"
+
+usage() {
+    printf 'Usage: %s [--check [LOCK_FILE] | --write [LOCK_FILE] | --print]\n' "$0" >&2
+    exit 2
+}
+
+build_blob_manifest() {
+    local temporary_index="$1"
+    local blob_manifest="$2"
+    local metadata
+    local mode
+    local blob_hash
+    local stage
+    local repository_path
+    local filesystem_count
+    local index_count
+
+    rm -f "${temporary_index}"
+    GIT_INDEX_FILE="${temporary_index}" git -C "${root_dir}" read-tree --empty
+    GIT_INDEX_FILE="${temporary_index}" git -C "${root_dir}" \
+        -c core.safecrlf=false add -f --all -- vendor
+
+    : > "${blob_manifest}"
+    while IFS= read -r -d '' index_entry; do
+        metadata="${index_entry%%$'\t'*}"
+        repository_path="${index_entry#*$'\t'}"
+        read -r mode blob_hash stage <<< "${metadata}"
+        [[ "${mode}" =~ ^[0-9]{6}$ ]]
+        [[ "${blob_hash}" =~ ^[0-9a-f]{40}$ ]]
+        test "${stage}" = "0"
+        case "${repository_path}" in
+            *$'\t'*|*$'\n'*|*$'\r'*)
+                printf 'Unsafe control character in vendored source path.\n' >&2
+                return 1
+                ;;
+        esac
+        printf '%s\t%s\t%s\n' "${mode}" "${blob_hash}" "${repository_path}" >> "${blob_manifest}"
+    done < <(GIT_INDEX_FILE="${temporary_index}" git -C "${root_dir}" ls-files --stage -z -- vendor)
+
+    filesystem_count="$(find "${vendor_root}" \( -type f -o -type l \) -printf '.' | wc -c)"
+    index_count="$(wc -l < "${blob_manifest}")"
+    test "${filesystem_count}" -eq "${index_count}" || {
+        printf 'Vendor file count differs between the filesystem and canonical Git index: %s != %s\n' \
+            "${filesystem_count}" "${index_count}" >&2
+        return 1
+    }
+}
+
+tree_digest() {
+    local module_path="$1"
+    local blob_manifest="$2"
+    local source_dir="${vendor_root}/${module_path}"
+
+    test -d "${source_dir}" || {
+        printf 'Pinned vendor source is missing: %s\n' "${module_path}" >&2
+        return 1
+    }
+
+    awk -F '\t' -v prefix="vendor/${module_path}/" '
+        index($3, prefix) == 1 {
+            relative_path = substr($3, length(prefix) + 1)
+            kind = ($1 == "120000" ? "L" : "F")
+            print kind "\t" relative_path "\t" $2
+            count++
+        }
+        END { if (count == 0) exit 1 }
+    ' "${blob_manifest}" | LC_ALL=C sort | sha256sum | awk '{print $1}'
+}
+
+generate_lock() {
+    local module_path
+    local pin
+    local extra
+    local digest
+    local entry_count=0
+    local generation_status=0
+    local temporary_dir
+    local temporary_index
+    local blob_manifest
+
+    test -f "${manifest_file}" && test ! -L "${manifest_file}"
+    test -d "${vendor_root}" && test ! -L "${vendor_root}"
+
+    temporary_dir="$(mktemp -d)"
+    temporary_index="${temporary_dir}/vendor.index"
+    blob_manifest="${temporary_dir}/vendor-blobs.tsv"
+    if ! build_blob_manifest "${temporary_index}" "${blob_manifest}"; then
+        rm -rf "${temporary_dir}"
+        return 1
+    fi
+
+    printf 'module\tpin\ttree_sha256\n'
+    while read -r module_path pin extra; do
+        module_path="${module_path%$'\r'}"
+        pin="${pin%$'\r'}"
+        extra="${extra%$'\r'}"
+        test -n "${module_path:-}" || continue
+        case "${module_path}" in
+            \#*) continue ;;
+        esac
+        test -n "${pin:-}" || continue
+        test -z "${extra:-}" || {
+            printf 'Unexpected extra field in vendor manifest for %s\n' "${module_path}" >&2
+            return 1
+        }
+        [[ "${module_path}" =~ ^[A-Za-z0-9._~/-]+$ ]]
+        [[ "${pin}" =~ ^[A-Za-z0-9._+~/-]+$ ]]
+        case "/${module_path}/" in
+            *'/../'*|*'/./'*)
+                printf 'Unsafe vendor module path: %s\n' "${module_path}" >&2
+                return 1
+                ;;
+        esac
+        if ! digest="$(tree_digest "${module_path}" "${blob_manifest}")"; then
+            printf 'Unable to produce a complete vendor tree digest for %s\n' "${module_path}" >&2
+            generation_status=1
+            break
+        fi
+        [[ "${digest}" =~ ^[0-9a-f]{64}$ ]] || {
+            printf 'Invalid vendor tree digest for %s\n' "${module_path}" >&2
+            generation_status=1
+            break
+        }
+        printf '%s\t%s\t%s\n' "${module_path}" "${pin}" "${digest}"
+        entry_count=$((entry_count + 1))
+    done < "${manifest_file}"
+
+    rm -rf "${temporary_dir}"
+    test "${generation_status}" -eq 0
+    test "${entry_count}" -gt 0
+}
+
+case "${mode}" in
+    --print)
+        test "$#" -eq 1 || usage
+        generate_lock
+        ;;
+    --write)
+        test "$#" -le 2 || usage
+        temporary_lock="$(mktemp "${lock_file}.tmp.XXXXXX")"
+        trap 'rm -f "${temporary_lock}"' EXIT
+        generate_lock > "${temporary_lock}"
+        mv -f "${temporary_lock}" "${lock_file}"
+        ;;
+    --check)
+        test "$#" -le 2 || usage
+        test -f "${lock_file}" && test ! -L "${lock_file}"
+        temporary_lock="$(mktemp)"
+        trap 'rm -f "${temporary_lock}"' EXIT
+        generate_lock > "${temporary_lock}"
+        if ! cmp -s "${lock_file}" "${temporary_lock}"; then
+            printf 'vendor.lock does not match the committed vendor source tree.\n' >&2
+            diff -u "${lock_file}" "${temporary_lock}" >&2 || true
+            exit 1
+        fi
+        ;;
+    *)
+        usage
+        ;;
+esac

@@ -1,0 +1,105 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+root_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+lock_file="${VENDOR_LOCK:-${root_dir}/vendor.lock}"
+output_dir="${1:?usage: vendor-licenses OUTPUT_DIRECTORY}"
+temporary_dir="$(mktemp -d)"
+trap 'rm -rf "${temporary_dir}"' EXIT
+
+test -f "${lock_file}" && test ! -L "${lock_file}"
+mkdir -p "${output_dir}"
+test -z "$(find "${output_dir}" -mindepth 1 -print -quit)" || {
+    printf 'License output directory must be empty: %s\n' "${output_dir}" >&2
+    exit 1
+}
+
+manifest_file="${output_dir}/manifest.tsv"
+expected_modules="${temporary_dir}/expected-modules.txt"
+included_modules="${temporary_dir}/included-modules.txt"
+: > "${expected_modules}"
+: > "${included_modules}"
+printf 'module\tpin\tlicense_path\tsha256\tprovenance\n' > "${manifest_file}"
+
+while IFS=$'\t' read -r module_path pin tree_hash extra; do
+    module_path="${module_path%$'\r'}"
+    pin="${pin%$'\r'}"
+    tree_hash="${tree_hash%$'\r'}"
+    extra="${extra%$'\r'}"
+    test "${module_path}" != "module" || continue
+    test -n "${module_path}" && test -n "${pin}" && test -n "${tree_hash}"
+    test -z "${extra}" || {
+        printf 'Unexpected vendor lock field for %s\n' "${module_path}" >&2
+        exit 1
+    }
+    [[ "${module_path}" =~ ^[A-Za-z0-9._~/-]+$ ]]
+    case "/${module_path}/" in
+        *'/../'*|*'/./'*)
+            printf 'Unsafe vendor module path in license manifest: %s\n' "${module_path}" >&2
+            exit 1
+            ;;
+    esac
+
+    source_dir="${root_dir}/vendor/${module_path}"
+    test -d "${source_dir}" && test ! -L "${source_dir}"
+    printf '%s\n' "${module_path}" >> "${expected_modules}"
+
+    license_sources=()
+    while IFS= read -r -d '' license_file; do
+        license_sources+=("${license_file}")
+    done < <(find "${source_dir}" -type f \( \
+        -iname 'LICENSE' -o -iname 'LICENSE.*' -o \
+        -iname 'LICENCE' -o -iname 'LICENCE.*' -o \
+        -iname 'COPYING' -o -iname 'COPYING.*' -o \
+        -iname 'NOTICE' -o -iname 'NOTICE.*' -o \
+        -iname 'COPYRIGHT' -o -iname 'COPYRIGHT.*' -o \
+        -iname 'AUTHORS' -o -iname 'AUTHORS.*' \
+        \) -print0 | LC_ALL=C sort -z)
+
+    inherited_provenance=""
+    if test "${#license_sources[@]}" -eq 0; then
+        case "${module_path}" in
+            github.com/rancher/go-rancher-metadata)
+                license_sources=("${root_dir}/LICENSE")
+                inherited_provenance='https://github.com/rancher-archives/go-rancher-metadata/blob/e7e6d237929226cd5da7bd5728a045a686691b1e/LICENSE'
+                ;;
+            k8s.io/kubernetes/pkg/controller/framework)
+                license_sources=("${root_dir}/vendor/k8s.io/kubernetes/LICENSE")
+                inherited_provenance='vendor/k8s.io/kubernetes/LICENSE'
+                ;;
+            *)
+                printf 'No license or attribution evidence found for vendored module: %s\n' "${module_path}" >&2
+                exit 1
+                ;;
+        esac
+    fi
+
+    for license_source in "${license_sources[@]}"; do
+        test -f "${license_source}" && test ! -L "${license_source}"
+        case "${license_source}" in
+            "${source_dir}"/*)
+                relative_license="${license_source#${source_dir}/}"
+                provenance="vendor/${module_path}/${relative_license}"
+                ;;
+            *)
+                relative_license="LICENSE"
+                provenance="${inherited_provenance}"
+                ;;
+        esac
+        destination="${output_dir}/${module_path}/${relative_license}"
+        mkdir -p "$(dirname "${destination}")"
+        install -m 0644 "${license_source}" "${destination}"
+        digest="$(sha256sum "${destination}" | awk '{print $1}')"
+        printf '%s\t%s\t%s\t%s\t%s\n' \
+            "${module_path}" "${pin}" "${relative_license}" "${digest}" "${provenance}" \
+            >> "${manifest_file}"
+        printf '%s\n' "${module_path}" >> "${included_modules}"
+    done
+done < "${lock_file}"
+
+LC_ALL=C sort -u "${expected_modules}" -o "${expected_modules}"
+LC_ALL=C sort -u "${included_modules}" -o "${included_modules}"
+diff -u "${expected_modules}" "${included_modules}"
+test -s "${manifest_file}"
+
+printf 'Vendored license bundle created for %s modules.\n' "$(wc -l < "${included_modules}")"
