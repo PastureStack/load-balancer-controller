@@ -1,0 +1,25 @@
+name: CodeQL
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+  schedule:
+    - cron: '17 3 * * 1'
+  workflow_dispatch:
+
+permissions:
+  actions: read
+  contents: read
+  packages: read
+  security-events: write
+
+jobs:
+  codeql:
+    uses: PastureStack/.github/.github/workflows/codeql-go.yml@22a8aa544022cfb622d401cde0f26f0661a848b6
+    with:
+      extra-languages: '["actions"]'
+
