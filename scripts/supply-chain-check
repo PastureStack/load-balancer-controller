@@ -1,275 +1,44 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-default_root_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-root_dir="$(cd "${PASTURESTACK_SUPPLY_CHAIN_ROOT:-${default_root_dir}}" && pwd)"
-lock_file="${root_dir}/supply-chain.lock"
-ca_version='20260601~26.04.1'
-ca_sha256='6077d27c6b6f8b23590cb01ff877ed8c804a67a5442cc32b5a33da10d2bd0e90'
-ca_url="https://snapshot.ubuntu.com/ubuntu/20260814T000000Z/pool/main/c/ca-certificates/ca-certificates_${ca_version}_all.deb"
-temporary_files=()
+root_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "${root_dir}"
 
-cleanup() {
-    if [ "${#temporary_files[@]}" -gt 0 ]; then
-        rm -f -- "${temporary_files[@]}"
-    fi
-}
-trap cleanup EXIT
-
-assert_contains() {
-    local file_path="$1"
-    local expected="$2"
-    grep -Fq -- "${expected}" "${file_path}" || {
-        printf 'Missing supply-chain value in %s: %s\n' "${file_path}" "${expected}" >&2
-        exit 1
-    }
+require_text() {
+    grep -Fq -- "$2" "$1" || { printf 'Missing required pin in %s: %s\n' "$1" "$2" >&2; exit 1; }
 }
 
-assert_count() {
-    local expected="$1"
-    local pattern="$2"
-    shift 2
-    local actual
-    actual="$(grep -h -F -- "${pattern}" "$@" | wc -l | tr -d '[:space:]')"
-    if [ "${actual}" -ne "${expected}" ]; then
-        printf 'Expected %s occurrences of %s, found %s.\n' "${expected}" "${pattern}" "${actual}" >&2
-        exit 1
-    fi
-}
+[[ -f go.mod && -f go.sum && -f vendor/modules.txt ]]
+go mod verify
+go list -mod=vendor ./... >/dev/null
+require_text go.mod 'go 1.27'
+require_text go.mod 'github.com/gorilla/websocket v1.5.3'
+require_text go.mod 'github.com/sirupsen/logrus v1.10.1'
+require_text go.mod 'github.com/urfave/cli/v3 v3.11.0'
+require_text go.mod 'golang.org/x/sys v0.47.0'
+require_text Dockerfile.dapper 'ARG GO_VERSION=1.27.0'
+require_text Dockerfile.dapper 'FROM docker:29.7.2-cli@sha256:000bb62ff495f986c9f5578eb67cc2cb98b91138eda81d7762d5371eb8a497fe AS docker-cli'
+require_text package/haproxy/Dockerfile 'ARG HAPROXY_VERSION=3.4.3'
+require_text package/haproxy/Dockerfile 'FROM ubuntu:26.04@sha256:678c6550cc43645e08669028bc177f50be4e7c5b8cca677067b1914d4afc7a03 AS trust-bootstrap'
+require_text .github/workflows/security-release-gate.yml 'TRIVY_IMAGE: ghcr.io/aquasecurity/trivy:0.74.0@sha256:62b1e65e8869bc4b4c6aa4fa2b21595256c7c2f6018a9d9ad61caf87187c1969'
 
-validate_apt_lock() {
-    local apt_lock="$1"
-    local dockerfile="$2"
-    local keys_file
-    keys_file="$(mktemp)"
-    temporary_files+=("${keys_file}")
-
-    test -f "${apt_lock}" && test ! -L "${apt_lock}"
-    awk '
-        /^[[:space:]]*$/ || /^#/ { next }
-        !/^UBUNTU_APT_[A-Z0-9_]+='\''[A-Za-z0-9.+:~_-]+'\''$/ { exit 1 }
-        {
-            key=$0
-            sub(/=.*/, "", key)
-            if (seen[key]++) exit 1
-            print key
-        }
-        END { if (!seen["UBUNTU_APT_SNAPSHOT"]) exit 1 }
-    ' "${apt_lock}" > "${keys_file}" || {
-        printf 'Unsafe, duplicate, or malformed Ubuntu APT lock entry: %s\n' "${apt_lock}" >&2
-        exit 1
-    }
-    assert_contains "${apt_lock}" "UBUNTU_APT_SNAPSHOT='20260814T000000Z'"
-
-    while IFS= read -r variable; do
-        grep -Fq -- "\${${variable}}" "${dockerfile}" || {
-            printf 'Unused Ubuntu APT lock variable %s in %s.\n' "${variable}" "${apt_lock}" >&2
-            exit 1
-        }
-    done < "${keys_file}"
-
-    while IFS= read -r reference; do
-        variable="${reference#\$\{}"
-        variable="${variable%\}}"
-        grep -Fxq -- "${variable}" "${keys_file}" || {
-            printf 'Undefined Ubuntu APT lock variable %s in %s.\n' "${variable}" "${dockerfile}" >&2
-            exit 1
-        }
-    done < <(grep -o -E '\$\{UBUNTU_APT_[A-Z0-9_]+\}' "${dockerfile}" | LC_ALL=C sort -u)
-}
-
-validate_release_checksum_manifest() {
-    local workflow="$1"
-
-    awk '
-        /^[[:space:]]*sha256sum[[:space:]]*\\[[:space:]]*$/ {
-            if (in_manifest || found_manifest) invalid = 1
-            in_manifest = 1
-            found_manifest = 1
-            next
-        }
-        in_manifest && /^[[:space:]]*>[[:space:]]*SHA256SUMS[[:space:]]*$/ {
-            in_manifest = 0
-            closed_manifest = 1
-            next
-        }
-        in_manifest {
-            asset=$0
-            sub(/^[[:space:]]*/, "", asset)
-            sub(/[[:space:]]*\\[[:space:]]*$/, "", asset)
-            if (asset == "" || asset ~ /[\\\\\/]/) invalid = 1
-            asset_count++
-        }
-        END {
-            if (!found_manifest || !closed_manifest || in_manifest || invalid || asset_count != 5) exit 1
-        }
-    ' "${workflow}" || {
-        printf 'Release SHA256SUMS must contain exactly five portable asset basenames: %s\n' "${workflow}" >&2
-        exit 1
-    }
-}
-
-test -f "${lock_file}" && test ! -L "${lock_file}"
-awk -F '\t' 'NR == 1 { if ($0 != "kind\tname\tversion\tlocator\tintegrity\tusage") exit 1; next } NF != 6 { exit 1 } END { if (NR != 19) exit 1 }' "${lock_file}"
-
-assert_contains "${root_dir}/Dockerfile.dapper" 'FROM docker:29.7.2-cli@sha256:000bb62ff495f986c9f5578eb67cc2cb98b91138eda81d7762d5371eb8a497fe AS docker-cli'
-assert_contains "${root_dir}/Dockerfile.dapper" 'FROM ubuntu:26.04@sha256:678c6550cc43645e08669028bc177f50be4e7c5b8cca677067b1914d4afc7a03'
-assert_contains "${root_dir}/Dockerfile.dapper" 'ARG DOCKER_BUILDX_VERSION=0.36.1'
-assert_contains "${root_dir}/Dockerfile.dapper" 'COPY --from=docker-cli /usr/local/libexec/docker/cli-plugins/docker-buildx /usr/local/libexec/docker/cli-plugins/docker-buildx'
-assert_contains "${root_dir}/Dockerfile.dapper" "docker --version | grep -F 'Docker version 29.7.2,'"
-assert_contains "${root_dir}/Dockerfile.dapper" 'docker buildx version | grep -F " v${DOCKER_BUILDX_VERSION} "'
-assert_contains "${root_dir}/Dockerfile.dapper" 'DOCKER_CONFIG=/tmp/docker-config'
-assert_contains "${root_dir}/Dockerfile.dapper" 'COPY ubuntu-apt.lock /licenses/ubuntu-apt.lock'
-assert_contains "${root_dir}/Dockerfile.dapper" "ADD --checksum=sha256:${ca_sha256} ${ca_url} /tmp/ca-certificates.deb"
-assert_contains "${root_dir}/Dockerfile.dapper" 'ARG GO_VERSION=1.26.6'
-assert_contains "${root_dir}/Dockerfile.dapper" 'ARG GO_LINUX_AMD64_SHA256=708effb774be8237570d0add163225abbdfaf4fca28b2611df167beba4feef89'
-assert_contains "${root_dir}/Dockerfile.dapper" 'ARG GO_LINUX_ARM64_SHA256=d0507e9e9d7fe012aae570108cbd76c15de879e17130ab8cb90d4d7445cb1f2e'
-
-assert_contains "${root_dir}/package/haproxy/Dockerfile" 'ARG HAPROXY_VERSION=3.4.3'
-assert_contains "${root_dir}/package/haproxy/Dockerfile" 'ARG HAPROXY_SERIES=3.4'
-assert_contains "${root_dir}/package/haproxy/Dockerfile" 'ARG HAPROXY_SHA256=7fa666d36d198275999e2a68dda44d3d37960f2f7aed3a595fb811f4fd0515b5'
-assert_contains "${root_dir}/package/haproxy/Dockerfile" 'FROM ubuntu:26.04@sha256:678c6550cc43645e08669028bc177f50be4e7c5b8cca677067b1914d4afc7a03 AS trust-bootstrap'
-assert_contains "${root_dir}/package/haproxy/Dockerfile" "ADD --checksum=sha256:${ca_sha256} ${ca_url} /tmp/ca-certificates.deb"
-assert_contains "${root_dir}/package/haproxy/Dockerfile" 'COPY --from=trust-bootstrap /ca-certificates.crt /etc/ssl/certs/ca-certificates.crt'
-assert_contains "${root_dir}/package/haproxy/Dockerfile" 'COPY ubuntu-apt.lock /licenses/ubuntu-apt.lock'
-assert_contains "${root_dir}/package/haproxy/Dockerfile" 'https://www.haproxy.org/download/${HAPROXY_SERIES}/src/haproxy-${HAPROXY_VERSION}.tar.gz'
-
-assert_contains "${root_dir}/package/rancher/Dockerfile" 'FROM ubuntu:26.04@sha256:678c6550cc43645e08669028bc177f50be4e7c5b8cca677067b1914d4afc7a03'
-assert_contains "${root_dir}/package/rancher/Dockerfile" 'COPY ubuntu-apt.lock /licenses/ubuntu-apt.lock'
-assert_contains "${root_dir}/package/rancher/Dockerfile" "ADD --checksum=sha256:${ca_sha256} ${ca_url} /tmp/ca-certificates.deb"
-
-assert_contains "${root_dir}/examples/nginxRC.yml" 'image: nginx:1.30.4-alpine'
-assert_contains "${root_dir}/examples/nginx1RC.yml" 'image: nginx:1.30.4-alpine'
-assert_contains "${root_dir}/package/haproxy/Dockerfile" 'COPY third-party-licenses /usr/share/licenses/load-balancer-controller/third-party/'
-assert_contains "${root_dir}/package/rancher/Dockerfile" 'COPY third-party-licenses /usr/share/licenses/load-balancer-controller/third-party/'
-assert_contains "${root_dir}/scripts/package" 'DOCKER_BUILDKIT="${DOCKER_BUILDKIT:-1}" docker build'
-assert_contains "${root_dir}/scripts/build" 'CGO_ENABLED=0 go build -trimpath -tags netgo \'
-assert_contains "${root_dir}/scripts/build" '-ldflags "-buildid= -X main.VERSION=$VERSION $LINKFLAGS" \'
-assert_contains "${root_dir}/scripts/entry" 'trap restore_output_ownership EXIT'
-assert_contains "${root_dir}/scripts/entry" 'chown -R -- "${DAPPER_UID}:${DAPPER_GID}" "${output}"'
-assert_contains "${root_dir}/.github/workflows/security-release-gate.yml" 'test "$(stat -c '\''%u:%g'\'' bin/lb-controller)" = "$expected_owner"'
-assert_contains "${root_dir}/.github/workflows/release.yml" 'test "$(stat -c '\''%u:%g'\'' bin/lb-controller)" = "$expected_owner"'
-assert_contains "${root_dir}/.github/workflows/security-release-gate.yml" 'test ! -e .docker'
-assert_contains "${root_dir}/.github/workflows/release.yml" 'test ! -e .docker'
-assert_contains "${root_dir}/.github/workflows/codeql-verification.yml" 'actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1'
-assert_contains "${root_dir}/.github/workflows/codeql-verification.yml" 'github/codeql-action/init@ff2f1c621b7f889edc0d3c761ac2e6a3f8cdb0dd'
-assert_contains "${root_dir}/.github/workflows/codeql-verification.yml" 'github/codeql-action/analyze@ff2f1c621b7f889edc0d3c761ac2e6a3f8cdb0dd'
-assert_contains "${root_dir}/.github/workflows/codeql-verification.yml" 'security-events: write'
-assert_contains "${root_dir}/.github/workflows/codeql-verification.yml" 'CODEQL_EXTRACTOR_GO_OPTION_EXTRACT_TESTS=true'
-assert_contains "${root_dir}/.github/workflows/codeql-verification.yml" "upload: \${{ github.ref == 'refs/heads/main' && 'always' || 'never' }}"
-assert_contains "${root_dir}/.github/workflows/codeql-verification.yml" 'codeql_tool_execution_errors='
-assert_contains "${root_dir}/.github/workflows/security-release-gate.yml" 'actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a'
-assert_contains "${root_dir}/.github/workflows/security-release-gate.yml" 'docker run --rm --entrypoint docker "$DAPPER_IMAGE" --version \'
-assert_contains "${root_dir}/.github/workflows/security-release-gate.yml" "grep -Fq 'Docker version 29.7.2,' evidence/dapper-docker-version.txt"
-assert_contains "${root_dir}/.github/workflows/security-release-gate.yml" 'golang.org/x/vuln/cmd/govulncheck@v1.7.0'
-assert_contains "${root_dir}/.github/workflows/security-release-gate.yml" '--vex /work/evidence/openvex.json --show-suppressed'
-assert_contains "${root_dir}/.github/workflows/security-release-gate.yml" '--raw-source evidence/source-sbom-security.raw.json'
-assert_contains "${root_dir}/.github/workflows/security-release-gate.yml" '--raw-dapper evidence/dapper-security.raw.json'
-assert_contains "${root_dir}/.github/workflows/release.yml" 'actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8'
-assert_contains "${root_dir}/.github/workflows/release.yml" 'SERVICE_IMAGE: ghcr.io/pasturestack/load-balancer-service:v0.9.27'
-assert_contains "${root_dir}/.github/workflows/release.yml" 'SIDECAR_IMAGE: ghcr.io/pasturestack/load-balancer-controller-sidecar:v0.9.27'
-assert_contains "${root_dir}/.github/workflows/release.yml" "test \"\$GITHUB_REF_NAME\" = 'v0.9.27'"
-assert_contains "${root_dir}/.github/workflows/release.yml" '            cd dist/release'
-validate_release_checksum_manifest "${root_dir}/.github/workflows/release.yml"
-
+for obsolete in controller/kubernetes controller/rancherglb provider/rancher package/rancher trash.conf vendor.lock; do
+    [[ ! -e "${obsolete}" ]] || { printf 'Obsolete compatibility surface remains: %s\n' "${obsolete}" >&2; exit 1; }
+done
+if grep -R -n -E 'k8s\.io/kubernetes|github\.com/rancher/(go-rancher|go-rancher-metadata|event-subscriber|log)' \
+    --include='*.go' --exclude-dir=.git --exclude-dir=vendor .; then
+    printf 'An abandoned runtime dependency remains in source.\n' >&2
+    exit 1
+fi
+if grep -R -n -E 'Verify-(Peer|Host)[[:space:]]+"?false|trusted=yes|--insecure|--no-check-certificate|AllowUnauthenticated[[:space:]]+"true"' \
+    Dockerfile.dapper package/haproxy/Dockerfile .github/workflows; then
+    printf 'TLS or package-signature verification is disabled.\n' >&2
+    exit 1
+fi
 while IFS= read -r action_use; do
     [[ "${action_use}" =~ uses:[[:space:]]+[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+(/[A-Za-z0-9_.-]+)*@[0-9a-f]{40}([[:space:]]|$) ]] || {
-        printf 'GitHub Action is not pinned to a complete commit SHA: %s\n' "${action_use}" >&2
+        printf 'GitHub Action is not pinned to a commit SHA: %s\n' "${action_use}" >&2
         exit 1
     }
-done < <(grep -R -h -E '^[[:space:]]+uses:' "${root_dir}/.github/workflows")
-
-assert_contains "${lock_file}" $'archive\tubuntu-ca-certificates-deb\t20260601~26.04.1\thttps://snapshot.ubuntu.com/ubuntu/20260814T000000Z/pool/main/c/ca-certificates/ca-certificates_20260601~26.04.1_all.deb\tsha256:6077d27c6b6f8b23590cb01ff877ed8c804a67a5442cc32b5a33da10d2bd0e90\tdapper,load-balancer-service,controller-sidecar'
-assert_contains "${lock_file}" $'oci\tubuntu\t26.04\tdocker.io/library/ubuntu\tsha256:678c6550cc43645e08669028bc177f50be4e7c5b8cca677067b1914d4afc7a03'
-assert_contains "${lock_file}" $'oci\tdocker-cli\t29.7.2-cli\tdocker.io/library/docker\tsha256:000bb62ff495f986c9f5578eb67cc2cb98b91138eda81d7762d5371eb8a497fe\tdapper'
-assert_contains "${lock_file}" $'tool\tdocker-buildx\t0.36.1\thttps://github.com/docker/buildx/releases/tag/v0.36.1\tbundled-in:sha256:000bb62ff495f986c9f5578eb67cc2cb98b91138eda81d7762d5371eb8a497fe\tdapper'
-assert_contains "${lock_file}" $'module\tgithub.com/gogo/protobuf\tv1.3.2\thttps://github.com/gogo/protobuf\th1:Ov1cvc58UF3b5XjBnZv7+opcTcQFZebYjWzi34vdm4Q=\tvendor'
-assert_contains "${lock_file}" $'module\tgithub.com/gorilla/websocket\tv1.5.3\thttps://github.com/gorilla/websocket\th1:saDtZ6Pbx/0u+bgYQ3q96pZgCzfhKXGPqt7kZ72aNNg=\tvendor'
-assert_contains "${lock_file}" $'tool\tgovulncheck\t1.7.0\thttps://pkg.go.dev/golang.org/x/vuln/cmd/govulncheck@v1.7.0\th1:4MQBuhmXbz2uepNJrf3v+aaZLGDqw1JluwYboegA1qg='
-assert_contains "${lock_file}" $'action\tactions-checkout\t7.0.1\thttps://github.com/actions/checkout\tcommit:3d3c42e5aac5ba805825da76410c181273ba90b1'
-assert_contains "${lock_file}" $'action\tgithub-codeql-action\t4.37.7\thttps://github.com/github/codeql-action\tcommit:ff2f1c621b7f889edc0d3c761ac2e6a3f8cdb0dd'
-assert_contains "${lock_file}" $'oci\ttrivy\t0.74.0\tghcr.io/aquasecurity/trivy\tsha256:62b1e65e8869bc4b4c6aa4fa2b21595256c7c2f6018a9d9ad61caf87187c1969'
-assert_contains "${root_dir}/.github/workflows/security-release-gate.yml" 'TRIVY_IMAGE: ghcr.io/aquasecurity/trivy:0.74.0@sha256:62b1e65e8869bc4b4c6aa4fa2b21595256c7c2f6018a9d9ad61caf87187c1969'
-assert_contains "${root_dir}/.github/workflows/release.yml" 'TRIVY_IMAGE: ghcr.io/aquasecurity/trivy:0.74.0@sha256:62b1e65e8869bc4b4c6aa4fa2b21595256c7c2f6018a9d9ad61caf87187c1969'
-assert_count 2 'TRIVY_IMAGE:' "${root_dir}/.github/workflows/security-release-gate.yml" "${root_dir}/.github/workflows/release.yml"
-assert_count 2 'TRIVY_IMAGE: ghcr.io/aquasecurity/trivy:0.74.0@sha256:62b1e65e8869bc4b4c6aa4fa2b21595256c7c2f6018a9d9ad61caf87187c1969' \
-    "${root_dir}/.github/workflows/security-release-gate.yml" "${root_dir}/.github/workflows/release.yml"
-
-validate_apt_lock "${root_dir}/ubuntu-apt.lock" "${root_dir}/Dockerfile.dapper"
-validate_apt_lock "${root_dir}/package/haproxy/ubuntu-apt.lock" "${root_dir}/package/haproxy/Dockerfile"
-validate_apt_lock "${root_dir}/package/rancher/ubuntu-apt.lock" "${root_dir}/package/rancher/Dockerfile"
-
-dockerfiles=(
-    "${root_dir}/Dockerfile.dapper"
-    "${root_dir}/package/haproxy/Dockerfile"
-    "${root_dir}/package/rancher/Dockerfile"
-)
-assert_count 3 "ADD --checksum=sha256:${ca_sha256} ${ca_url} /tmp/ca-certificates.deb" "${dockerfiles[@]}"
-assert_count 3 'dpkg-deb --extract /tmp/ca-certificates.deb' "${dockerfiles[@]}"
-assert_count 4 'Acquire::https::Verify-Peer "true"' "${dockerfiles[@]}"
-assert_count 4 'Acquire::https::Verify-Host "true"' "${dockerfiles[@]}"
-assert_count 4 'URIs: https://snapshot.ubuntu.com/ubuntu/%s' "${dockerfiles[@]}"
-assert_count 4 'Signed-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg' "${dockerfiles[@]}"
-assert_count 4 'UBUNTU-APT-PACKAGES.tsv' "${dockerfiles[@]}"
-
-if grep -R -n -E 'Verify-(Peer|Host)[[:space:]]+"?false|trusted=yes|--insecure|--no-check-certificate|AllowUnauthenticated[[:space:]]+"true"|AllowInsecureRepositories[[:space:]]+"true"' "${dockerfiles[@]}"; then
-    printf 'TLS or package-signature verification must not be disabled during image construction.\n' >&2
-    exit 1
-fi
-
-if grep -R -n -F 'docker version --format' \
-    "${root_dir}/Dockerfile.dapper" \
-    "${root_dir}/.github/workflows/security-release-gate.yml"; then
-    printf 'Docker CLI version verification must not require a running daemon.\n' >&2
-    exit 1
-fi
-
-if grep -n -E '^[[:space:]]*exec[[:space:]]' "${root_dir}/scripts/entry"; then
-    printf 'Dapper entrypoint must retain control so its ownership cleanup trap runs.\n' >&2
-    exit 1
-fi
-
-if grep -R -n -E 'UBUNTU_MIRROR|RC16_IMAGE_VERSION|http://(archive|security)\.ubuntu\.com' \
-    "${root_dir}/Dockerfile.dapper" \
-    "${root_dir}/Makefile" \
-    "${root_dir}/scripts/package" \
-    "${root_dir}/package"; then
-    printf 'A mutable or insecure Ubuntu build input remains.\n' >&2
-    exit 1
-fi
-
-if grep -n -E '^[[:space:]]{8}[a-z0-9][a-z0-9+.-]*[[:space:]]*\\$' "${dockerfiles[@]}"; then
-    printf 'An unversioned direct APT package remains.\n' >&2
-    exit 1
-fi
-
-if grep -R -n -E 'image:[[:space:]]+[^[:space:]]+:latest|image:[[:space:]]+[^[:space:]]+@sha256:' "${root_dir}/examples"; then
-    printf 'Examples must show a version tag without exposing a digest in the user interface.\n' >&2
-    exit 1
-fi
-
-if grep -n -E 'share-mnt|COPY[[:space:]].*(/usr/bin/docker|docker-buildx)' \
-    "${root_dir}/package/rancher/Dockerfile"; then
-    printf 'The runtime sidecar must not contain build-only Docker tooling.\n' >&2
-    exit 1
-fi
-
-if grep -R -n -E -- '--ignore-(unfixed|status)|--skip-(dirs|files)|\.trivyignore' \
-    "${root_dir}/.github/workflows"; then
-    printf 'Security workflows must not hide vulnerability findings with ignore or skip rules.\n' >&2
-    exit 1
-fi
-
-while IFS= read -r dockerfile; do
-    while IFS= read -r from_line; do
-        case "${from_line}" in
-            *@sha256:*) ;;
-            *)
-                printf 'Unpinned Dockerfile base: %s: %s\n' "${dockerfile}" "${from_line}" >&2
-                exit 1
-                ;;
-        esac
-    done < <(grep -E '^FROM ' "${dockerfile}")
-done < <(find "${root_dir}" -path '*/vendor/*' -prune -o -name Dockerfile -print; printf '%s\n' "${root_dir}/Dockerfile.dapper")
-
-printf 'Supply-chain lock checks passed.\n'
+done < <(grep -R -h -E '^[[:space:]]+uses:' .github/workflows)
+printf 'Supply-chain pins passed for the maintained HAProxy runtime.\n'

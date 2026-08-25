@@ -7,7 +7,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/rancher/lb-controller/config"
+	"github.com/PastureStack/load-balancer-controller/config"
 )
 
 func newDirectoryTestController(t *testing.T) (*LoadBalancerController, *RCertificateFetcher, string, string) {

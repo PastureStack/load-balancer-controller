@@ -8,8 +8,8 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/rancher/lb-controller/config"
-	"github.com/rancher/log"
+	"github.com/PastureStack/load-balancer-controller/config"
+	log "github.com/sirupsen/logrus"
 )
 
 var lbp Provider

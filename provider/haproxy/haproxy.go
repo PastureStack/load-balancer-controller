@@ -2,8 +2,8 @@ package haproxy
 
 import (
 	"bufio"
+	"errors"
 	"fmt"
-	"io/ioutil"
 	"net"
 	"os"
 	"os/exec"
@@ -13,11 +13,10 @@ import (
 	"text/template"
 	"time"
 
-	"github.com/mitchellh/go-ps"
-	"github.com/rancher/lb-controller/config"
-	"github.com/rancher/lb-controller/provider"
-	utils "github.com/rancher/lb-controller/utils"
-	"github.com/rancher/log"
+	"github.com/PastureStack/load-balancer-controller/config"
+	"github.com/PastureStack/load-balancer-controller/provider"
+	utils "github.com/PastureStack/load-balancer-controller/utils"
+	log "github.com/sirupsen/logrus"
 )
 
 func init() {
@@ -129,7 +128,7 @@ func (cfg *haproxyConfig) write(lbConfig *config.LoadBalancerConfig) (err error)
 }
 
 func (cfg *haproxyConfig) readPid() (string, error) {
-	content, err := ioutil.ReadFile(cfg.PidFile)
+	content, err := os.ReadFile(cfg.PidFile)
 	if err != nil {
 		return "", err
 	}
@@ -170,7 +169,7 @@ func (lbp *Provider) applyHaproxyConfig(lbConfig *config.LoadBalancerConfig) err
 		certStr := fmt.Sprintf("%s\n%s", cert.Key, cert.Cert)
 		b := []byte(certStr)
 		path := fmt.Sprintf("%s/%s.pem", newCerts, cert.Name)
-		err := ioutil.WriteFile(path, b, 0644)
+		err := os.WriteFile(path, b, 0644)
 		if err != nil {
 			return err
 		}
@@ -239,14 +238,14 @@ func (lbp *Provider) IsEndpointDrained(ep *config.Endpoint) bool {
 				if err != nil {
 					log.Errorf("Error %v while converting pid %v", err, pid)
 				} else {
-					process, err := ps.FindProcess(pidInt)
+					exists, err := processExists(pidInt)
 					if err != nil {
 						log.Errorf("Error %v while listing haproxy process by pid %v", err, pid)
 					}
-					if err == nil && process == nil {
+					if err == nil && !exists {
 						return true
 					}
-					log.Infof("IsEndpointDrained: old haproxy process found pid %v, name %v", pid, process.Executable())
+					log.Infof("IsEndpointDrained: old haproxy process found pid %v", pid)
 				}
 			} else {
 				//check if current pid stats are scur = 0 AND no other pid exists.
@@ -280,6 +279,20 @@ func (lbp *Provider) IsEndpointDrained(ep *config.Endpoint) bool {
 		}
 	}
 	return false
+}
+
+func processExists(pid int) (bool, error) {
+	if pid < 1 {
+		return false, errors.New("process ID must be positive")
+	}
+	_, err := os.Stat(fmt.Sprintf("/proc/%d", pid))
+	if err == nil {
+		return true, nil
+	}
+	if errors.Is(err, os.ErrNotExist) {
+		return false, nil
+	}
+	return false, err
 }
 
 func (dm *drainMgr) readCurrentStats(ep *config.Endpoint) (string, []string, error) {

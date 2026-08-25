@@ -5,10 +5,10 @@ import (
 	"sync"
 	"time"
 
-	revents "github.com/rancher/event-subscriber/events"
-	"github.com/rancher/go-rancher/v2"
-	"github.com/rancher/lb-controller/config"
-	"github.com/rancher/log"
+	"github.com/PastureStack/load-balancer-controller/config"
+	revents "github.com/PastureStack/load-balancer-controller/internal/events"
+	"github.com/PastureStack/load-balancer-controller/internal/rancherclient/v2"
+	log "github.com/sirupsen/logrus"
 )
 
 type EventsHandler interface {

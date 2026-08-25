@@ -1,84 +1,107 @@
 package controller
 
 import (
+	"sync"
 	"time"
 
-	"github.com/rancher/log"
-	"k8s.io/kubernetes/pkg/client/cache"
-	"k8s.io/kubernetes/pkg/controller/framework"
-	"k8s.io/kubernetes/pkg/util/wait"
-	"k8s.io/kubernetes/pkg/util/workqueue"
+	log "github.com/sirupsen/logrus"
 )
 
-var (
-	keyFunc = framework.DeletionHandlingMetaNamespaceKeyFunc
-)
-
-// StoreToIngressLister makes a Store that lists Ingress.
-type StoreToIngressLister struct {
-	cache.Store
-}
-
-// TaskQueue manages a work queue through an independent worker that
-// invokes the given sync function for every work item inserted.
+// TaskQueue serializes controller reconciliation and coalesces duplicate keys.
+// It replaces the Kubernetes 1.4 workqueue previously used by every controller,
+// without carrying the obsolete Kubernetes client into the HAProxy runtime.
 type TaskQueue struct {
-	// queue is the work queue the worker polls
-	queue *workqueue.Type
-	// sync is called for each item in the queue
-	sync func(string)
-	// workerDone is closed when the worker exits
+	mu         sync.Mutex
+	items      []string
+	pending    map[string]struct{}
+	wake       chan struct{}
 	workerDone chan struct{}
+	stopOnce   sync.Once
+	stopped    bool
+	sync       func(string)
 }
 
-func (t *TaskQueue) Run(period time.Duration, stopCh <-chan struct{}) {
-	wait.Until(t.worker, period, stopCh)
+func (t *TaskQueue) pop() (string, bool) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if len(t.items) == 0 {
+		return "", false
+	}
+	key := t.items[0]
+	t.items = t.items[1:]
+	delete(t.pending, key)
+	return key, true
 }
 
-// Enqueue enqueues ns/name of the given api object in the task queue.
-func (t *TaskQueue) Enqueue(obj interface{}) {
-	if key, ok := obj.(string); ok {
-		t.queue.Add(key)
-	} else {
-		key, err := keyFunc(obj)
-		if err != nil {
-			log.Infof("could not get key for object %+v: %v", obj, err)
-			return
+// Run processes queued keys until stopCh is closed. period remains in the
+// signature for source compatibility; wakeups are event-driven.
+func (t *TaskQueue) Run(_ time.Duration, stopCh <-chan struct{}) {
+	defer close(t.workerDone)
+	for {
+		if key, ok := t.pop(); ok {
+			log.Debugf("syncing %v", key)
+			t.sync(key)
+			continue
 		}
-		t.queue.Add(key)
+		select {
+		case <-stopCh:
+			t.stopOnce.Do(func() {
+				t.mu.Lock()
+				t.stopped = true
+				t.mu.Unlock()
+			})
+			return
+		case <-t.wake:
+		}
+	}
+}
+
+// Enqueue schedules a key once until it is picked up by the worker.
+func (t *TaskQueue) Enqueue(key string) {
+	if key == "" {
+		return
+	}
+	t.mu.Lock()
+	if t.stopped {
+		t.mu.Unlock()
+		return
+	}
+	if _, exists := t.pending[key]; exists {
+		t.mu.Unlock()
+		return
+	}
+	t.pending[key] = struct{}{}
+	t.items = append(t.items, key)
+	t.mu.Unlock()
+	select {
+	case t.wake <- struct{}{}:
+	default:
 	}
 }
 
 func (t *TaskQueue) Requeue(key string, err error) {
 	log.Debugf("Requeuing %v, err %v", key, err)
-	t.queue.Add(key)
+	t.Enqueue(key)
 }
 
-// worker processes work in the queue through sync.
-func (t *TaskQueue) worker() {
-	for {
-		key, quit := t.queue.Get()
-		if quit {
-			close(t.workerDone)
-			return
-		}
-		log.Debugf("syncing %v", key)
-		t.sync(key.(string))
-		t.queue.Done(key)
-	}
-}
-
-// Shutdown shuts down the work queue and waits for the worker to ACK
+// Shutdown prevents new work. The owning controller closes stopCh to stop Run.
 func (t *TaskQueue) Shutdown() {
-	t.queue.ShutDown()
-	<-t.workerDone
+	t.stopOnce.Do(func() {
+		t.mu.Lock()
+		t.stopped = true
+		t.mu.Unlock()
+		select {
+		case t.wake <- struct{}{}:
+		default:
+		}
+	})
 }
 
-// NewTaskQueue creates a new task queue with the given sync function.
-// The sync function is called for every element inserted into the queue.
 func NewTaskQueue(syncFn func(string)) *TaskQueue {
 	return &TaskQueue{
-		queue:      workqueue.New(),
-		sync:       syncFn,
+		pending:    make(map[string]struct{}),
+		wake:       make(chan struct{}, 1),
 		workerDone: make(chan struct{}),
+		sync:       syncFn,
 	}
 }

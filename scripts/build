@@ -8,6 +8,6 @@ cd "${script_dir}/.."
 
 mkdir -p bin
 LINKFLAGS="-s -w"
-CGO_ENABLED=0 go build -trimpath -tags netgo \
+CGO_ENABLED=0 go build -mod=vendor -trimpath -tags netgo \
     -ldflags "-buildid= -X main.VERSION=$VERSION $LINKFLAGS" \
     -o bin/lb-controller

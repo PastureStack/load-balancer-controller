@@ -5,8 +5,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/rancher/lb-controller/config"
-	//"github.com/rancher/log"
+	"github.com/PastureStack/load-balancer-controller/config"
 )
 
 func GetDefaultConfig() map[string]map[string]string {

@@ -2,8 +2,8 @@ package controller
 
 import (
 	"fmt"
-	"github.com/rancher/lb-controller/config"
-	"github.com/rancher/lb-controller/provider"
+	"github.com/PastureStack/load-balancer-controller/config"
+	"github.com/PastureStack/load-balancer-controller/provider"
 )
 
 type LBController interface {
@@ -24,7 +24,7 @@ func GetController(name string, metadataURL string) LBController {
 		controller.Init(metadataURL)
 		return controller
 	}
-	return controllers["kubernetes"]
+	return controllers["rancher"]
 }
 
 func RegisterController(name string, controller LBController) error {

@@ -7,9 +7,9 @@ ADD --checksum=sha256:6077d27c6b6f8b23590cb01ff877ed8c804a67a5442cc32b5a33da10d2
 
 ARG DAPPER_HOST_ARCH=amd64
 ARG DOCKER_BUILDX_VERSION=0.36.1
-ARG GO_VERSION=1.26.6
-ARG GO_LINUX_AMD64_SHA256=708effb774be8237570d0add163225abbdfaf4fca28b2611df167beba4feef89
-ARG GO_LINUX_ARM64_SHA256=d0507e9e9d7fe012aae570108cbd76c15de879e17130ab8cb90d4d7445cb1f2e
+ARG GO_VERSION=1.27.0
+ARG GO_LINUX_AMD64_SHA256=675c26c449cbb18fc24b74650de1eabbae6e16f64326fd85a283fb3b58280685
+ARG GO_LINUX_ARM64_SHA256=51798d2c42d0e1c6ed7fd9f48728b4193abac9e8aad6dbac2fe96a81f5909bda
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV HOST_ARCH=${DAPPER_HOST_ARCH} \
@@ -53,10 +53,9 @@ RUN set -eux; \
     rm -f /bin/sh && ln -s /bin/bash /bin/sh
 
 ENV GOPATH=/go \
-    PATH=/go/bin:/usr/local/go/bin:${PATH} \
-    SHELL=/bin/bash \
-    GO111MODULE=off \
-    GO15VENDOREXPERIMENT=1 \
+	PATH=/go/bin:/usr/local/go/bin:${PATH} \
+	SHELL=/bin/bash \
+	GO111MODULE=on \
     GOCACHE=/tmp/go-build-cache \
     GOTELEMETRY=off \
     DOCKER_CONFIG=/tmp/docker-config \
@@ -82,7 +81,7 @@ RUN set -eux; \
     docker --version | grep -F 'Docker version 29.7.2,'; \
     docker buildx version | grep -F " v${DOCKER_BUILDX_VERSION} "
 
-ENV DAPPER_SOURCE=/go/src/github.com/rancher/lb-controller/
+ENV DAPPER_SOURCE=/go/src/github.com/PastureStack/load-balancer-controller/
 ENV DAPPER_OUTPUT="./bin ./dist"
 ENV DAPPER_DOCKER_SOCKET=true
 ENV DAPPER_ENV="TAG REPO IMAGE_NAMESPACE IMAGE_PREFIX VERSION_OVERRIDE DOCKER_BUILD_NETWORK"
@@ -90,7 +89,7 @@ ENV HOME=${DAPPER_SOURCE}
 WORKDIR ${DAPPER_SOURCE}
 
 RUN git config --system --add safe.directory ${DAPPER_SOURCE} && \
-    git config --system --add safe.directory /go/src/github.com/rancher/lb-controller
+	git config --system --add safe.directory /go/src/github.com/PastureStack/load-balancer-controller
 
 ENTRYPOINT ["./scripts/entry"]
 CMD ["ci"]

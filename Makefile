@@ -4,7 +4,7 @@ TARGETS := $(shell ls scripts)
 DAPPER_IMAGE ?= pasturestack-lb-controller-dapper:ubuntu26
 DAPPER_HOST_ARCH ?= amd64
 DOCKER_BUILD_NETWORK ?= host
-DAPPER_SOURCE ?= /go/src/github.com/rancher/lb-controller
+DAPPER_SOURCE ?= /go/src/github.com/PastureStack/load-balancer-controller
 
 .dapper:
 >docker build \
@@ -40,7 +40,7 @@ deps: .dapper
 >  -e ARCH=$(DAPPER_HOST_ARCH) \
 >  -e VERSION_OVERRIDE \
 >  -e DOCKER_BUILD_NETWORK=$(DOCKER_BUILD_NETWORK) \
->  $(DAPPER_IMAGE) /bin/bash -lc 'echo "vendor directory is committed; no dependency bootstrap required"'
+>  $(DAPPER_IMAGE) /bin/bash -lc 'go mod tidy && go mod vendor'
 
 .DEFAULT_GOAL := ci
 

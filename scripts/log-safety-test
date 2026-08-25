@@ -2,32 +2,12 @@
 set -euo pipefail
 
 root_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-
-assert_contains() {
-    local file_path="$1"
-    local expected="$2"
-    grep -Fq -- "${expected}" "${file_path}" || {
-        printf 'Missing log-safety boundary in %s: %s\n' "${file_path}" "${expected}" >&2
-        exit 1
-    }
-}
-
-assert_contains "${root_dir}/utils/log_safety.go" 'input = strings.ReplaceAll(input, "\r", `\r`)'
-assert_contains "${root_dir}/utils/log_safety.go" 'return strings.ReplaceAll(input, "\n", `\n`)'
-assert_contains "${root_dir}/controller/kubernetes/kubernetes.go" 'log.Errorf("Error forming LB Config from Ingress spec: %s", utils.SanitizeLogText(err.Error()))'
-assert_contains "${root_dir}/controller/kubernetes/kubernetes.go" 'logrus.Errorf("failed to apply lb config on provider: %s", utils.SanitizeLogText(err.Error()))'
-assert_contains "${root_dir}/controller/kubernetes/kubernetes.go" 'logrus.Errorf("failed to cleanup lb config on provider: %s", utils.SanitizeLogText(err.Error()))'
-assert_contains "${root_dir}/controller/rancher/rancher.go" 'log.Errorf("Failed to apply lb config on provider: %s", utils.SanitizeLogText(err.Error()))'
-assert_contains "${root_dir}/controller/rancher/rancher.go" 'log.Errorf("Failed to get lb config: %s", utils.SanitizeLogText(err.Error()))'
-assert_contains "${root_dir}/controller/rancherglb/rancherglb.go" 'log.Errorf("Failed to apply lb config on provider: %s", utils.SanitizeLogText(err.Error()))'
-assert_contains "${root_dir}/controller/rancherglb/rancherglb.go" 'log.Errorf("Failed to get lb config: %s", utils.SanitizeLogText(err.Error()))'
-
+grep -Fq 'input = strings.ReplaceAll(input, "\r", `\r`)' "${root_dir}/utils/log_safety.go"
+grep -Fq 'return strings.ReplaceAll(input, "\n", `\n`)' "${root_dir}/utils/log_safety.go"
+grep -Fq 'utils.SanitizeLogText(err.Error())' "${root_dir}/controller/rancher/rancher.go"
 if grep -R -n -E '(failed|Failed|Error forming) (to )?(apply|cleanup|get|form).*lb config.*%[#v+]' \
-    "${root_dir}/controller/kubernetes" \
-    "${root_dir}/controller/rancher" \
-    "${root_dir}/controller/rancherglb"; then
+    "${root_dir}/controller/rancher"; then
     printf 'An unescaped load-balancer configuration error can forge log records.\n' >&2
     exit 1
 fi
-
-printf 'Log-safety source boundaries passed.\n'
+printf 'Log-safety source boundary passed.\n'

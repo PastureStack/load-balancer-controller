@@ -11,14 +11,14 @@ import (
 	"sync"
 	"time"
 
-	revents "github.com/rancher/event-subscriber/events"
-	"github.com/rancher/go-rancher-metadata/metadata"
-	"github.com/rancher/go-rancher/v2"
-	"github.com/rancher/lb-controller/config"
-	"github.com/rancher/lb-controller/controller"
-	"github.com/rancher/lb-controller/provider"
-	utils "github.com/rancher/lb-controller/utils"
-	"github.com/rancher/log"
+	"github.com/PastureStack/load-balancer-controller/config"
+	"github.com/PastureStack/load-balancer-controller/controller"
+	revents "github.com/PastureStack/load-balancer-controller/internal/events"
+	"github.com/PastureStack/load-balancer-controller/internal/metadata"
+	"github.com/PastureStack/load-balancer-controller/internal/rancherclient/v2"
+	"github.com/PastureStack/load-balancer-controller/provider"
+	utils "github.com/PastureStack/load-balancer-controller/utils"
+	log "github.com/sirupsen/logrus"
 )
 
 func init() {

@@ -2,7 +2,6 @@ package rancher
 
 import (
 	"fmt"
-	"io/ioutil"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -10,11 +9,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/rancher/go-rancher-metadata/metadata"
-	"github.com/rancher/go-rancher/v2"
-	"github.com/rancher/lb-controller/config"
-	"github.com/rancher/lb-controller/provider/rancher"
-	"github.com/rancher/log"
+	"github.com/PastureStack/load-balancer-controller/config"
+	"github.com/PastureStack/load-balancer-controller/internal/metadata"
+	"github.com/PastureStack/load-balancer-controller/internal/rancherclient/v2"
+	log "github.com/sirupsen/logrus"
 )
 
 const (
@@ -151,7 +149,7 @@ func (fetcher *RCertificateFetcher) UpdateEndpoints(lbSvc *metadata.Service, eps
 	opts := client.NewListOpts()
 	opts.Filters["uuid"] = lbSvc.UUID
 	opts.Filters["removed_null"] = "1"
-	lbs, err := rancher.GetLBServiceInternal(fetcher.Client, opts)
+	lbs, err := listLoadBalancerServices(fetcher.Client, opts)
 	if err != nil {
 		return fmt.Errorf("could not get LB service by uuid [%s]. Error: %#v", lbSvc.UUID, err)
 	}
@@ -168,6 +166,22 @@ func (fetcher *RCertificateFetcher) UpdateEndpoints(lbSvc *metadata.Service, eps
 		return fmt.Errorf("failed to update load balancer [%s] in stack [%s]. Error: %#v", lbSvc.Name, lbSvc.StackName, err)
 	}
 	return nil
+}
+
+func listLoadBalancerServices(rancherClient *client.RancherClient, opts *client.ListOpts) ([]client.LoadBalancerService, error) {
+	page, err := rancherClient.LoadBalancerService.List(opts)
+	if err != nil {
+		return nil, fmt.Errorf("could not list load-balancer services: %w", err)
+	}
+	all := append([]client.LoadBalancerService(nil), page.Data...)
+	for page.Pagination.Partial {
+		page, err = page.Next()
+		if err != nil {
+			return nil, fmt.Errorf("could not fetch the next load-balancer service page: %w", err)
+		}
+		all = append(all, page.Data...)
+	}
+	return all, nil
 }
 
 func (fetcher *RCertificateFetcher) ReadAllCertificatesFromDir(certDir string) []*config.Certificate {
@@ -276,7 +290,7 @@ func (fetcher *RCertificateFetcher) readCertificate(path string, f os.FileInfo, 
 		isKeyFound := false
 		cert := config.Certificate{}
 		cert.Name = f.Name()
-		files, err := ioutil.ReadDir(path)
+		files, err := os.ReadDir(path)
 		if err != nil {
 			return err
 		}
@@ -337,7 +351,7 @@ func (fetcher *RCertificateFetcher) evaluatueLinkAndReadFile(relativePath string
 }
 
 func (fetcher *RCertificateFetcher) readFile(filePath string) (*[]byte, error) {
-	contentBytes, err := ioutil.ReadFile(filePath)
+	contentBytes, err := os.ReadFile(filePath)
 	if err != nil {
 		return nil, fmt.Errorf("Error reading file %s, error: %v", filePath, err)
 	}

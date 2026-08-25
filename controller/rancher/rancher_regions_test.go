@@ -6,10 +6,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/rancher/go-rancher-metadata/metadata"
-	"github.com/rancher/go-rancher/v2"
-	"github.com/rancher/lb-controller/config"
-	utils "github.com/rancher/lb-controller/utils"
+	"github.com/PastureStack/load-balancer-controller/config"
+	"github.com/PastureStack/load-balancer-controller/internal/metadata"
+	"github.com/PastureStack/load-balancer-controller/internal/rancherclient/v2"
+	utils "github.com/PastureStack/load-balancer-controller/utils"
 )
 
 var lbc1 *LoadBalancerController

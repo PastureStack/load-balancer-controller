@@ -1,13 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-cd "${script_dir}/.."
+root_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "${root_dir}"
 
-echo Running tests
-
-PACKAGES=". $(find -name '*.go' | xargs -I{} dirname {} |  cut -f2 -d/ | sort -u | grep -Ev '(^\.$|.git|.trash-cache|vendor|bin)' | sed -e 's!^!./!' -e 's!$!/...!')"
-
-RACE=""
-[ "${ARCH:-amd64}" == "amd64" ] && RACE=-race
-go test ${RACE} -cover -tags=test ${PACKAGES}
+race_flag=()
+if [[ "${ARCH:-amd64}" == "amd64" ]]; then
+    race_flag=(-race)
+fi
+go test -mod=vendor "${race_flag[@]}" -cover -tags=test ./...

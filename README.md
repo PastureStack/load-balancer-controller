@@ -37,12 +37,16 @@ The maintained build uses Ubuntu 26.04, a pinned Go toolchain, and a source-buil
 make ci
 ```
 
-The build produces:
+The build produces `ghcr.io/pasturestack/load-balancer-service:<version>`.
+The obsolete Kubernetes bootstrap sidecar is not part of the maintained product.
 
-- `ghcr.io/pasturestack/load-balancer-service:<version>`
-- `ghcr.io/pasturestack/load-balancer-controller-sidecar:<version>`
+The Go runtime now uses Go Modules with four current external modules. The
+Rancher 1.6 API, event, and metadata wire contracts required by Server are
+maintained as bounded internal compatibility packages instead of abandoned
+third-party dependencies.
 
-No CI/CD workflow is enabled in this repository. Release images are built and verified manually before publication.
+GitHub workflows run CodeQL plus the same module, race-test, govulncheck,
+reproducibility, Trivy, SBOM, and image checks used for releases.
 
 ## Security and provenance
 

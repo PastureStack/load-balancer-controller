@@ -15,4 +15,9 @@ The packaged rsyslog configuration and daemon options comply with the default Ub
 
 The runtime must be validated through an actual PastureStack Server project with a registered node, a healthy backend service, an HTTP request through the load balancer, and container restart recovery before a release tag is published.
 
-Windows containers and Kubernetes ingress operation are not release-qualified by the PastureStack Server replacement test.
+Windows containers are not release-qualified by the PastureStack Server replacement test.
+
+The maintained binary intentionally exposes only the shipped `rancher` controller and
+`haproxy` provider. The unqualified Kubernetes 1.4 ingress, cross-region GLB, and
+control-plane LB-provider plugins were removed: none were used by the packaged command,
+and retaining them pulled unsupported 2016 Kubernetes libraries into the runtime.

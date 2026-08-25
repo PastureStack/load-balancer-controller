@@ -2,8 +2,8 @@ package provider
 
 import (
 	"fmt"
-	"github.com/rancher/lb-controller/config"
-	utils "github.com/rancher/lb-controller/utils"
+	"github.com/PastureStack/load-balancer-controller/config"
+	utils "github.com/PastureStack/load-balancer-controller/utils"
 )
 
 const Localhost = "localhost"

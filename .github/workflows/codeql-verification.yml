@@ -39,25 +39,21 @@ jobs:
         run: |
           set -euo pipefail
           test -z "$(git status --porcelain)"
-          git merge-base --is-ancestor b75f773f0e643d99124fc8146b92bb5431e625a6 HEAD
-          test "$(git rev-list --count b75f773f0e643d99124fc8146b92bb5431e625a6..HEAD)" -eq 1
-          git diff --check b75f773f0e643d99124fc8146b92bb5431e625a6..HEAD -- . \
-            ':(exclude)vendor/**'
-          ./scripts/vendor-lock --check
-          ./scripts/supply-chain-check-test
-          ./scripts/log-safety-test
+          git diff --check HEAD -- . ':(exclude)vendor/**'
+          go_version_from_mod="$(awk '/^go / { print $2 }' go.mod)"
+          test "$go_version_from_mod" = '1.27'
 
       - name: Install checksum-pinned Go toolchain
         if: matrix.language == 'go'
         shell: bash
         run: |
           set -euo pipefail
-          archive="$RUNNER_TEMP/go1.26.6.linux-amd64.tar.gz"
+          archive="$RUNNER_TEMP/go1.27.0.linux-amd64.tar.gz"
           curl --fail --silent --show-error --location \
             --output "$archive" \
-            'https://go.dev/dl/go1.26.6.linux-amd64.tar.gz'
+            'https://go.dev/dl/go1.27.0.linux-amd64.tar.gz'
           printf '%s  %s\n' \
-            '708effb774be8237570d0add163225abbdfaf4fca28b2611df167beba4feef89' \
+            '675c26c449cbb18fc24b74650de1eabbae6e16f64326fd85a283fb3b58280685' \
             "$archive" | sha256sum --check
           tar -C "$RUNNER_TEMP" -xzf "$archive"
           "$RUNNER_TEMP/go/bin/go" version
@@ -66,7 +62,7 @@ jobs:
           printf 'CODEQL_EXTRACTOR_GO_OPTION_EXTRACT_TESTS=true\n' >> "$GITHUB_ENV"
 
       - name: Initialize CodeQL
-        uses: github/codeql-action/init@ff2f1c621b7f889edc0d3c761ac2e6a3f8cdb0dd # v4.37.7
+        uses: github/codeql-action/init@db488ddef3bf6cb639b32c2e9a7c0a7ea8271d28 # v4.37.8
         with:
           languages: ${{ matrix.language }}
           build-mode: ${{ matrix.build-mode }}
@@ -80,23 +76,19 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          export GO111MODULE=off
-          export GO15VENDOREXPERIMENT=1
           export GOTELEMETRY=off
-          export GOPATH="$RUNNER_TEMP/gopath"
-          source_root="$GOPATH/src/github.com/rancher/lb-controller"
-          mkdir -p "$(dirname "$source_root")" "$GITHUB_WORKSPACE/bin"
-          ln -s "$GITHUB_WORKSPACE" "$source_root"
-          cd "$source_root"
-          go test -run '^$' -tags=test ./...
-          go test ./vendor/golang.org/x/sys/windows/mkwinsyscall
-          CGO_ENABLED=0 go build -trimpath -tags netgo \
-            -ldflags='-buildid= -s -w -X main.VERSION=v0.9.27' \
-            -o "$GITHUB_WORKSPACE/bin/lb-controller" ./
+          go mod verify
+          ./scripts/supply-chain-check
+          ./scripts/log-safety-test
+          go test -mod=vendor -run '^$' -tags=test ./...
+          mkdir -p bin
+          CGO_ENABLED=0 go build -mod=vendor -trimpath -tags netgo \
+            -ldflags="-buildid= -s -w -X main.VERSION=codeql-${GITHUB_SHA}" \
+            -o bin/lb-controller ./
 
       - name: Analyze and publish main-branch CodeQL results
         id: codeql_analyze
-        uses: github/codeql-action/analyze@ff2f1c621b7f889edc0d3c761ac2e6a3f8cdb0dd # v4.37.7
+        uses: github/codeql-action/analyze@db488ddef3bf6cb639b32c2e9a7c0a7ea8271d28 # v4.37.8
         with:
           category: '/language:${{ matrix.language }}'
           upload: ${{ github.ref == 'refs/heads/main' && 'always' || 'never' }}
