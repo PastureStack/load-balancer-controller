@@ -25,13 +25,13 @@ The controller accepts role-specific credentials when the orchestration engine s
 
 It also accepts the generic `CATTLE_ACCESS_KEY` and `CATTLE_SECRET_KEY` pair used by older compatible control-plane paths. Role-specific values always take precedence. Secret values are never logged.
 
-The HAProxy logging helper keeps its configuration under the Ubuntu AppArmor-approved `/etc/rsyslog.d` path and does not create a daemon PID file. A logging-policy denial therefore cannot block HAProxy configuration from being applied.
+The HAProxy logging helper keeps its configuration under the standard `/etc/rsyslog.d` path and does not require a daemon PID file. Logging initialization is validated independently before HAProxy configuration is applied.
 
 Protocol-critical `CATTLE_*` variables, `io.rancher.*` labels, metadata paths, API types, and provider identifiers remain compatibility interfaces. They do not represent PastureStack branding or affiliation.
 
 ## Build and test
 
-The maintained build uses Ubuntu 26.04, a pinned Go toolchain, and a source-built HAProxy:
+The disposable build environment uses Ubuntu 26.04 and a pinned Go toolchain. The shipped runtime uses Alpine 3.24 with only the commands and libraries required by the controller and source-built HAProxy 3.4 LTS:
 
 ```sh
 make ci

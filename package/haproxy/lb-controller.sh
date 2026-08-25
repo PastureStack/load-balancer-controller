@@ -15,7 +15,7 @@ if [ -n "$ssl_cert_file" ]; then
 fi
 
 if [ "$(id -u)" = "0" ]; then
-    exec setpriv --reuid=10001 --regid=10001 --init-groups lb-controller "$@"
+    exec su-exec 10001:10001 lb-controller "$@"
 fi
 
 exec lb-controller "$@"
