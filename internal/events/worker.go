@@ -47,7 +47,12 @@ func (wp *skippingWorkerPool) HandleWork(event *Event, eventHandlers map[string]
 			doWork(event, eventHandlers, apiClient, wp.eventLocker(event))
 		}()
 	default:
-		log.Warnf("No workers available, dropping event. workerCount: %v, event: %v", cap(wp.workers), *event)
+		log.WithFields(log.Fields{
+			"workerCount": cap(wp.workers),
+			"eventName":   safeLogValue(event.Name),
+			"eventId":     safeLogValue(event.ID),
+			"resourceId":  safeLogValue(event.ResourceID),
+		}).Warn("No workers available; dropping event")
 	}
 }
 
@@ -77,14 +82,16 @@ func doWork(event *Event, eventHandlers map[string]EventHandler, apiClient *clie
 
 	if event.Name != "ping" {
 		log.WithFields(log.Fields{
-			"event": *event,
+			"eventName":  safeLogValue(event.Name),
+			"eventId":    safeLogValue(event.ID),
+			"resourceId": safeLogValue(event.ResourceID),
 		}).Debug("Processing event.")
 	}
 
 	unlocker := locker.Lock()
 	if unlocker == nil {
 		log.WithFields(log.Fields{
-			"resourceId": event.ResourceID,
+			"resourceId": safeLogValue(event.ResourceID),
 		}).Debug("Resource locked. Dropping event")
 		return
 	}
@@ -93,10 +100,10 @@ func doWork(event *Event, eventHandlers map[string]EventHandler, apiClient *clie
 	if fn, ok := eventHandlers[event.Name]; ok {
 		if err := fn(event, apiClient); err != nil {
 			log.WithFields(log.Fields{
-				"eventName":  event.Name,
-				"eventId":    event.ID,
-				"resourceId": event.ResourceID,
-				"err":        err,
+				"eventName":  safeLogValue(event.Name),
+				"eventId":    safeLogValue(event.ID),
+				"resourceId": safeLogValue(event.ResourceID),
+				"err":        safeLogValue(err),
 			}).Error("Error processing event")
 
 			reply := &client.Publish{
@@ -108,13 +115,13 @@ func doWork(event *Event, eventHandlers map[string]EventHandler, apiClient *clie
 			_, err := apiClient.Publish.Create(reply)
 			if err != nil {
 				log.WithFields(log.Fields{
-					"err": err,
+					"err": safeLogValue(err),
 				}).Error("Error sending error-reply")
 			}
 		}
 	} else {
 		log.WithFields(log.Fields{
-			"eventName": event.Name,
+			"eventName": safeLogValue(event.Name),
 		}).Warn("No event handler registered for event")
 	}
 }
