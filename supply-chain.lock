@@ -9,7 +9,7 @@ module	github.com/urfave/cli/v3	v3.11.0	https://github.com/urfave/cli	h1:P/euJp9
 module	golang.org/x/sys	v0.47.0	https://go.googlesource.com/sys	h1:o7XGOvZQCADBQQ4Y7VNq2dRWQR7JmOUW8Kxx4ZsNgWs=	vendor
 oci	docker-cli	29.7.2-cli	docker.io/library/docker	sha256:000bb62ff495f986c9f5578eb67cc2cb98b91138eda81d7762d5371eb8a497fe	dapper
 oci	nginx	1.30.4-alpine	docker.io/library/nginx	sha256:97d490c12ba55b4946b01546d1c3ed324e8d41ab1c9fcb2a616aa470620e5b46	examples
-oci	ubuntu	26.04	docker.io/library/ubuntu	sha256:678c6550cc43645e08669028bc177f50be4e7c5b8cca677067b1914d4afc7a03	dapper,load-balancer-service
+oci	ubuntu	26.04	docker.io/library/ubuntu	sha256:2260313b31c8c011cd2eebe728008efac1b3982be73eb71348ea2648d2c0e09b	dapper,load-balancer-service
 snapshot	ubuntu-archive	20260814T000000Z	https://snapshot.ubuntu.com/ubuntu	not-applicable	dapper,load-balancer-service
 tool	govulncheck	1.7.0	https://pkg.go.dev/golang.org/x/vuln/cmd/govulncheck@v1.7.0	h1:4MQBuhmXbz2uepNJrf3v+aaZLGDqw1JluwYboegA1qg=	security-gate
 tool	docker-buildx	0.36.1	https://github.com/docker/buildx/releases/tag/v0.36.1	bundled-in:sha256:000bb62ff495f986c9f5578eb67cc2cb98b91138eda81d7762d5371eb8a497fe	dapper
