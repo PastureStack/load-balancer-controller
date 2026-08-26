@@ -56,7 +56,9 @@ RUN set -eux; \
         "bash=${ALPINE_BASH_VERSION}" \
         "ca-certificates=${ALPINE_CA_CERTIFICATES_VERSION}" \
         "curl=${ALPINE_CURL_VERSION}" \
+        "libcrypto3=${ALPINE_LIBCRYPTO3_VERSION}" \
         "libcap-utils=${ALPINE_LIBCAP_UTILS_VERSION}" \
+        "libssl3=${ALPINE_LIBSSL3_VERSION}" \
         "lua5.4-libs=${ALPINE_LUA5_4_LIBS_VERSION}" \
         "pcre2=${ALPINE_PCRE2_VERSION}" \
         "procps-ng=${ALPINE_PROCPS_NG_VERSION}" \

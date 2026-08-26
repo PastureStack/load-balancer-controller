@@ -20,6 +20,10 @@ require_text Dockerfile.dapper 'ARG GO_VERSION=1.27.0'
 require_text Dockerfile.dapper 'FROM docker:29.7.2-cli@sha256:000bb62ff495f986c9f5578eb67cc2cb98b91138eda81d7762d5371eb8a497fe AS docker-cli'
 require_text package/haproxy/Dockerfile 'ARG HAPROXY_VERSION=3.4.3'
 require_text package/haproxy/Dockerfile 'ARG ALPINE_IMAGE=docker.io/library/alpine:3.24@sha256:28bd5fe8b56d1bd048e5babf5b10710ebe0bae67db86916198a6eec434943f8b'
+require_text package/haproxy/Dockerfile '"libcrypto3=${ALPINE_LIBCRYPTO3_VERSION}"'
+require_text package/haproxy/Dockerfile '"libssl3=${ALPINE_LIBSSL3_VERSION}"'
+require_text package/haproxy/alpine-apk.lock "ALPINE_LIBCRYPTO3_VERSION='3.5.8-r0'"
+require_text package/haproxy/alpine-apk.lock "ALPINE_LIBSSL3_VERSION='3.5.8-r0'"
 require_text package/haproxy/Dockerfile 'TARGET=linux-musl'
 require_text package/haproxy/Dockerfile '"tini=${ALPINE_TINI_VERSION}"'
 require_text .github/workflows/security-release-gate.yml 'TRIVY_IMAGE: ghcr.io/aquasecurity/trivy:0.74.0@sha256:62b1e65e8869bc4b4c6aa4fa2b21595256c7c2f6018a9d9ad61caf87187c1969'
