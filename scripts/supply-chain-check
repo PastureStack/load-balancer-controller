@@ -24,7 +24,7 @@ require_text package/haproxy/Dockerfile 'TARGET=linux-musl'
 require_text package/haproxy/Dockerfile '"tini=${ALPINE_TINI_VERSION}"'
 require_text .github/workflows/security-release-gate.yml 'TRIVY_IMAGE: ghcr.io/aquasecurity/trivy:0.74.0@sha256:62b1e65e8869bc4b4c6aa4fa2b21595256c7c2f6018a9d9ad61caf87187c1969'
 
-for obsolete in controller/kubernetes controller/rancherglb provider/rancher package/rancher trash.conf vendor.lock; do
+for obsolete in controller/kubernetes controller/rancherglb provider/rancher package/rancher examples trash.conf vendor.lock; do
     [[ ! -e "${obsolete}" ]] || { printf 'Obsolete compatibility surface remains: %s\n' "${obsolete}" >&2; exit 1; }
 done
 if grep -R -n -E 'k8s\.io/kubernetes|github\.com/rancher/(go-rancher|go-rancher-metadata|event-subscriber|log)' \

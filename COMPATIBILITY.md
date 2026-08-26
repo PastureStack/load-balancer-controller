@@ -20,4 +20,6 @@ Windows containers are not release-qualified by the PastureStack Server replacem
 The maintained binary intentionally exposes only the shipped `rancher` controller and
 `haproxy` provider. The unqualified Kubernetes 1.4 ingress, cross-region GLB, and
 control-plane LB-provider plugins were removed: none were used by the packaged command,
-and retaining them pulled unsupported 2016 Kubernetes libraries into the runtime.
+and retaining them pulled unsupported 2016 Kubernetes libraries into the runtime. Their
+obsolete Kubernetes manifests are intentionally absent as well, so the repository does
+not advertise an unsupported deployment path or retain example credentials.
