@@ -230,9 +230,10 @@ func BuildCustomConfig(lbConfig *config.LoadBalancerConfig, customConfig string,
 					ep.Config = fmt.Sprintf("%s cookie %s", ep.Config, ep.Name)
 				}
 
-				//check if the endpoint is in drain list. If yes then add weight 0 to ep.Config
-				inDrainList, _ := drainMgr.isEndpointUpForDrain(ep)
-				if inDrainList || (ep.Weight != 1 && ep.Weight >= 0 && ep.Weight < 257) {
+				// Draining is runtime state, not desired configuration. Reconcile
+				// owned weights separately even when the reload script skips an
+				// unchanged configuration; never reload merely to undo a drain.
+				if ep.Weight != 1 && ep.Weight >= 0 && ep.Weight < 257 {
 					ep.Config = fmt.Sprintf("%s weight %d", ep.Config, ep.Weight)
 				}
 			}

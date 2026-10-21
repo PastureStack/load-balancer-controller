@@ -47,20 +47,23 @@ func init() {
 type Stat map[string]string
 
 type Provider struct {
-	cfg      *haproxyConfig
-	stopCh   chan struct{}
-	init     bool
-	drainMgr *drainMgr
+	cfg             *haproxyConfig
+	stopCh          chan struct{}
+	init            bool
+	runtimeMu       sync.Mutex
+	recoveryBlocked bool
+	drainMgr        *drainMgr
 }
 
 type haproxyConfig struct {
-	Name      string
-	ReloadCmd string
-	StartCmd  string
-	Config    string
-	Template  string
-	CertDir   string
-	PidFile   string
+	Name          string
+	ReloadCmd     string
+	StartCmd      string
+	Config        string
+	Template      string
+	CertDir       string
+	PidFile       string
+	reloadCommand func() error
 }
 
 type drainManager interface {
@@ -69,9 +72,13 @@ type drainManager interface {
 }
 
 type drainMgr struct {
-	drainList   map[string]string
-	mu          *sync.RWMutex
-	haproxySock string
+	drainList      map[string]string
+	mu             *sync.RWMutex
+	haproxySock    string
+	weights        map[string]map[string]drainWeight
+	desired        map[string]desiredEndpoint
+	command        func(string) ([]string, error)
+	olderProcesses func() (bool, error)
 }
 
 func (cfg *haproxyConfig) write(lbConfig *config.LoadBalancerConfig) (err error) {
@@ -138,6 +145,11 @@ func (cfg *haproxyConfig) readPid() (string, error) {
 }
 
 func (lbp *Provider) applyHaproxyConfig(lbConfig *config.LoadBalancerConfig) error {
+	lbp.runtimeMu.Lock()
+	defer lbp.runtimeMu.Unlock()
+	// A failed desired-config update must not let the retry timer restore
+	// weights using the previous (possibly now disabled) desired target set.
+	lbp.recoveryBlocked = true
 	// copy certificates
 	if _, err := os.Stat(lbp.cfg.CertDir); os.IsNotExist(err) {
 		if err = os.Mkdir(lbp.cfg.CertDir, 0755); err != nil {
@@ -179,7 +191,12 @@ func (lbp *Provider) applyHaproxyConfig(lbConfig *config.LoadBalancerConfig) err
 		return err
 	}
 
-	return lbp.cfg.reload()
+	if err := lbp.cfg.reload(); err != nil {
+		return err
+	}
+	lbp.drainMgr.setDesired(lbConfig)
+	lbp.recoveryBlocked = false
+	return lbp.reconcileDrains()
 }
 
 func (lbp *Provider) ApplyConfig(lbConfig *config.LoadBalancerConfig) error {
@@ -208,6 +225,8 @@ func (lbp *Provider) IsEndpointUpForDrain(ep *config.Endpoint) bool {
 }
 
 func (lbp *Provider) DrainEndpoint(ep *config.Endpoint) bool {
+	lbp.runtimeMu.Lock()
+	defer lbp.runtimeMu.Unlock()
 	pid, err := lbp.cfg.readPid()
 
 	if err != nil {
@@ -218,6 +237,8 @@ func (lbp *Provider) DrainEndpoint(ep *config.Endpoint) bool {
 }
 
 func (lbp *Provider) RemoveEndpointFromDrain(ep *config.Endpoint) {
+	lbp.runtimeMu.Lock()
+	defer lbp.runtimeMu.Unlock()
 	lbp.drainMgr.RemoveEndpointFromDrain(ep)
 }
 
@@ -314,8 +335,7 @@ func (dm *drainMgr) readCurrentStats(ep *config.Endpoint) (string, []string, err
 			if escur != "" {
 				escurInt, err := strconv.Atoi(escur)
 				if err != nil {
-					log.Errorf("Error %v while converting scur %v, defaulting to 0", err, escur)
-					escurInt = 0
+					return "", backendNames, fmt.Errorf("invalid HAProxy current session count for endpoint %s", ep.Name)
 				}
 				totalScur = totalScur + escurInt
 			}
@@ -331,6 +351,9 @@ func (dm *drainMgr) readCurrentStats(ep *config.Endpoint) (string, []string, err
 }
 
 func (dm *drainMgr) olderPidExists() (bool, error) {
+	if dm.olderProcesses != nil {
+		return dm.olderProcesses()
+	}
 	output, err := exec.Command("pidof", "haproxy").Output()
 	if err != nil {
 		return true, fmt.Errorf("error listing old process %v", err)
@@ -348,24 +371,23 @@ func (dm *drainMgr) olderPidExists() (bool, error) {
 }
 
 func (dm *drainMgr) AddEndpointForDrain(ep *config.Endpoint, pid string) bool {
-	//check if drain is needed by looking at Stats
 	if ep != nil && ep.Name != "" {
-		scur, pxnames, err := dm.readCurrentStats(ep)
+		dm.mu.Lock()
+		defer dm.mu.Unlock()
+		if _, exists := dm.drainList[ep.Name]; exists {
+			return true
+		}
+		scur, _, err := dm.readCurrentStats(ep)
 		if err != nil {
 			log.Errorf("AddEndpointForDrain: Error %v", err)
 			return false
 		}
-		//set weight to zero on the socket anyway to stop accepting new connections
-		setWeightFailed := false
-		for _, pxname := range pxnames {
-			err = dm.SetWeightForDrain(pxname)
-			if err != nil {
-				log.Errorf("AddEndpointForDrain: Error %v setting weight via socket for Endpoint backend %v", err, pxname)
-				setWeightFailed = true
-			}
+		states, err := dm.readServerStates()
+		if err == nil {
+			err = dm.drainEndpoint(ep.Name, pid, states)
 		}
-
-		if setWeightFailed {
+		if err != nil {
+			log.Errorf("AddEndpointForDrain: endpoint=%s error=%s; retaining recovery ownership", ep.Name, utils.SanitizeLogText(err.Error()))
 			return false
 		}
 
@@ -385,9 +407,7 @@ func (dm *drainMgr) AddEndpointForDrain(ep *config.Endpoint, pid string) bool {
 			pid = ""
 		}
 		// add to drainList
-		dm.mu.Lock()
 		dm.drainList[ep.Name] = pid
-		dm.mu.Unlock()
 		return true
 	}
 	return false
@@ -434,7 +454,7 @@ func (dm *drainMgr) ReadStats() (map[string][]Stat, error) {
 
 		values := strings.Split(line, ",")
 		if len(keys) != len(values) {
-			log.Errorf("Invalid stat line: %s", line)
+			return nil, fmt.Errorf("invalid HAProxy stat column count: got %d, want %d", len(values), len(keys))
 		}
 
 		stat := Stat{}
@@ -450,19 +470,21 @@ func (dm *drainMgr) ReadStats() (map[string][]Stat, error) {
 }
 
 func (dm *drainMgr) SetWeightForDrain(backend string) error {
-	_, err := dm.runCommand("set server " + backend + " weight 0")
-	if err != nil {
-		return err
-	}
-	return nil
+	return dm.setWeight(backend, 0)
 }
 
 func (dm *drainMgr) runCommand(cmd string) ([]string, error) {
-	conn, err := net.Dial("unix", dm.haproxySock)
+	if dm.command != nil {
+		return dm.command(cmd)
+	}
+	conn, err := net.DialTimeout("unix", dm.haproxySock, 2*time.Second)
 	if err != nil {
 		return nil, err
 	}
 	defer conn.Close()
+	if err := conn.SetDeadline(time.Now().Add(2 * time.Second)); err != nil {
+		return nil, err
+	}
 
 	_, err = conn.Write([]byte(cmd + "\n"))
 	if err != nil {
@@ -491,6 +513,9 @@ func (cfg *haproxyConfig) start() error {
 }
 
 func (cfg *haproxyConfig) reload() error {
+	if cfg.reloadCommand != nil {
+		return cfg.reloadCommand()
+	}
 	output, err := exec.Command("sh", "-c", cfg.ReloadCmd).CombinedOutput()
 	msg := fmt.Sprintf("%v -- %v", cfg.Name, string(output))
 	if string(output) != "" {
@@ -513,7 +538,21 @@ func (lbp *Provider) IsHealthy() bool {
 func (lbp *Provider) Run(syncEndpointsQueue *utils.TaskQueue) {
 	lbp.StartHaproxy()
 	lbp.init = false
-	<-lbp.stopCh
+	ticker := time.NewTicker(5 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-lbp.stopCh:
+			return
+		case <-ticker.C:
+			lbp.runtimeMu.Lock()
+			err := lbp.reconcileDrains()
+			lbp.runtimeMu.Unlock()
+			if err != nil {
+				log.Errorf("Drain runtime reconciliation failed: %s; retrying", utils.SanitizeLogText(err.Error()))
+			}
+		}
+	}
 }
 
 func (lbp *Provider) Stop() error {
