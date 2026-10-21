@@ -70,10 +70,10 @@ jobs:
             SOURCE_DATE_EPOCH="$source_epoch" scripts/package
           test "$(wc -l < dist/images)" -eq 1
           grep -Fxq "$SERVICE_IMAGE" dist/images
-          docker run --rm --entrypoint /usr/bin/lb-controller "$SERVICE_IMAGE" --version \
-            | grep -Fq "$GITHUB_REF_NAME"
-          docker run --rm --entrypoint /usr/sbin/haproxy "$SERVICE_IMAGE" -vv \
-            | grep -Fq 'HAProxy version 3.4.3'
+          controller_version="$(docker run --rm --entrypoint /usr/bin/lb-controller "$SERVICE_IMAGE" --version)"
+          grep -F "$GITHUB_REF_NAME" <<< "$controller_version" >/dev/null
+          haproxy_version="$(docker run --rm --entrypoint /usr/sbin/haproxy "$SERVICE_IMAGE" -vv)"
+          grep -F 'HAProxy version 3.4.3' <<< "$haproxy_version" >/dev/null
 
       - name: Scan and create release SBOMs
         shell: bash
