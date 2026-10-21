@@ -6,16 +6,16 @@ This branch contains the compatibility runtime used by PastureStack Server to op
 
 ## Runtime image
 
-The maintained runtime release for PastureStack HAProxy load-balancer services is `v0.9.31`:
+The maintained runtime release for PastureStack HAProxy load-balancer services is `v0.9.32`:
 
 ```text
-ghcr.io/pasturestack/load-balancer-service:v0.9.31
+ghcr.io/pasturestack/load-balancer-service:v0.9.32
 ```
 
 Pin deployments to its published manifest digest:
 
 ```text
-ghcr.io/pasturestack/load-balancer-service@sha256:8133f65849afeb1436fc55e476bf3f8d152529af83e2f99151e4ee469ccd9167
+ghcr.io/pasturestack/load-balancer-service@sha256:2c02ac4da2cab5308f68baca04a007b82cd192bccbd7bc38232bd210dc2c02ac
 ```
 
 The image is intended to be managed by PastureStack Server, not started by itself:
@@ -23,7 +23,7 @@ the control plane supplies metadata, API credentials, service links, port rules,
 and health-check configuration. Selecting this release does not itself upgrade
 an existing Server installation or its load-balancer services.
 
-[Release v0.9.31](https://github.com/PastureStack/load-balancer-controller/releases/tag/v0.9.31)
+[Release v0.9.32](https://github.com/PastureStack/load-balancer-controller/releases/tag/v0.9.32)
 includes the controller archive, source and image SBOMs, checksums, and build
 provenance. Protected CI, race tests, source contracts, image/version checks,
 source/image vulnerability scans, and attestations passed for the published
@@ -55,8 +55,8 @@ metadata can recover its original weight even when its ID, IP, and generated
 configuration have not changed. No reload is forced solely for this recovery.
 
 Only weights changed by this controller are eligible. Existing zero weights,
-manual MAINT/DRAIN, configured `disabled` or weight zero, and an operator's later
-nonzero weight are preserved. Active drains follow a HAProxy reload; a completed
+manual MAINT/DRAIN, configured `disabled` or weight zero, and later same-process
+or nondefault runtime overrides are preserved. Active drains follow a HAProxy reload; a completed
 drain does not adopt an unexplained zero in a different HAProxy process. Recovery
 ownership is process-local and is not reconstructed by guessing after a controller
 restart.
@@ -74,16 +74,18 @@ to a runtime custom weight observed in the replacement process.
 If the desired configured weight changes while draining, recovery honors that
 new configured weight instead of undoing the user's edit with the old snapshot.
 
-Unreleased source change (not included in `v0.9.31`): a completed drain retains
+A completed drain also retains
 its saved weights through an observed stopping reload initialized at zero and a
 subsequent running reload initialized at the current desired weight. Recovery
 uses only the existing controller-owned drain source, honors desired edits, and
 preserves manual zero, MAINT/DRAIN, and nondefault runtime overrides. This is not
 general runtime-weight persistence across reloads or controller restarts. Source
 tests cover this two-reload sequence; native lifecycle acceptance remains pending.
-The same unreleased source pins authenticated API requests to the administrator's
-configured origin and keeps initialization/PID diagnostics control-safe without
-logging API response bodies.
+A new process's runtime weight equal to its configured initial weight is treated
+as reload initialization; the state API cannot distinguish an identical manual
+assignment. Authenticated API requests are pinned to the administrator's configured
+origin, and initialization/PID diagnostics are control-safe without logging API
+response bodies.
 
 The backend state fields follow the [HAProxy Runtime API management contract](https://docs.haproxy.org/3.4/management.html#show%20servers%20state).
 
