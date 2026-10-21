@@ -14,10 +14,14 @@ ghcr.io/pasturestack/load-balancer-service:v0.9.27
 
 Release deployments pin the image by digest. The image is not intended to be started by itself because the control plane supplies metadata, API credentials, service links, port rules, and health-check configuration.
 
-This branch prepares the `v0.9.28` source candidate for drain weight recovery.
+This branch prepares the `v0.9.29` source candidate for drain weight recovery.
 The candidate has passed the focused local race tests and static checks described
-below. Protected pull-request CI and native PastureStack load-balancer QA remain
-release qualification gates; `v0.9.28` has not been tagged or published.
+below. The signed `v0.9.28` tag is retained, but its release build failed because
+Alpine no longer served several locked package versions; no runtime image or
+GitHub release was published. This candidate updates only those direct-package
+pins and the matching OpenSSL safety checks. Protected pull-request CI and native
+PastureStack load-balancer QA remain release qualification gates; `v0.9.29` has
+not been tagged or published.
 
 ## Compatibility
 
@@ -32,7 +36,7 @@ It also accepts the generic `CATTLE_ACCESS_KEY` and `CATTLE_SECRET_KEY` pair use
 
 The HAProxy logging helper keeps its configuration under the standard `/etc/rsyslog.d` path and does not require a daemon PID file. Logging initialization is validated independently before HAProxy configuration is applied.
 
-### Drain weight recovery (v0.9.28 source candidate)
+### Drain weight recovery (v0.9.29 source candidate)
 
 The controller records each backend's runtime weight before setting it to zero
 for `target.drain`, including drains that already have zero active sessions.
