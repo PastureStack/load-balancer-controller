@@ -382,7 +382,9 @@ func (lbc *LoadBalancerController) BuildConfigFromMetadata(lbName, envUUID, self
 			for _, ep := range eps {
 				if _, ok := epMap[ep.IP]; !ok {
 					epMap[ep.IP] = ep.IP
-					ep.Weight = rule.Weight
+					if !ep.Stopping {
+						ep.Weight = rule.Weight
+					}
 					backend.Endpoints = append(backend.Endpoints, ep)
 				}
 			}
@@ -408,7 +410,9 @@ func (lbc *LoadBalancerController) BuildConfigFromMetadata(lbName, envUUID, self
 			epMap := make(map[string]string)
 			for _, ep := range eps {
 				epMap[ep.IP] = ep.IP
-				ep.Weight = rule.Weight
+				if !ep.Stopping {
+					ep.Weight = rule.Weight
+				}
 			}
 			allEps[pathUUID] = epMap
 		}
@@ -765,6 +769,7 @@ func getContainerEndpoint(c *metadata.Container, targetPort int, selfHostUUID st
 		}
 		if strings.EqualFold(c.State, "stopping") {
 			ep.Weight = 0
+			ep.Stopping = true
 		}
 
 		if localServicePreference != "any" && !strings.EqualFold(c.HostUUID, selfHostUUID) {
