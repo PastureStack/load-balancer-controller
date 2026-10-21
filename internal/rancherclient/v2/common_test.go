@@ -1,6 +1,7 @@
 package client
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -10,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	utils "github.com/PastureStack/load-balancer-controller/utils"
 	"github.com/gorilla/websocket"
 )
 
@@ -80,7 +82,11 @@ func TestWebsocketForwardsHeadersAndBasicAuth(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := &RancherBaseClientImpl{Opts: &ClientOpts{AccessKey: "access", SecretKey: "secret"}}
+	origin, err := newRequestOrigin(server.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	client := &RancherBaseClientImpl{Opts: &ClientOpts{AccessKey: "access", SecretKey: "secret"}, origin: origin}
 	connection, _, err := client.Websocket("ws"+strings.TrimPrefix(server.URL, "http"), map[string][]string{"X-Trace-ID": {"trace-1"}})
 	if err != nil {
 		t.Fatal(err)
@@ -106,8 +112,12 @@ func TestHTTPClientBlocksCrossOriginRedirect(t *testing.T) {
 	}))
 	defer source.Close()
 
-	client := &RancherBaseClientImpl{Opts: &ClientOpts{AccessKey: "access", SecretKey: "secret", Timeout: time.Second}}
-	err := client.doGet(source.URL, nil, &map[string]interface{}{})
+	origin, err := newRequestOrigin(source.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	client := &RancherBaseClientImpl{Opts: &ClientOpts{AccessKey: "access", SecretKey: "secret", Timeout: time.Second}, origin: origin}
+	err = client.doGet(source.URL, nil, &map[string]interface{}{})
 	if err == nil || !strings.Contains(err.Error(), "cross-origin redirect blocked") {
 		t.Fatalf("unexpected redirect result: %v", err)
 	}
@@ -122,5 +132,188 @@ func TestSafeURLForLogRemovesSecrets(t *testing.T) {
 		if strings.Contains(value, secret) {
 			t.Fatalf("safe URL still contains %q: %s", secret, value)
 		}
+	}
+}
+
+func TestSchemaDiscoveryDoesNotSendCredentialsCrossOrigin(t *testing.T) {
+	var reached atomic.Bool
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		reached.Store(true)
+		_, _ = w.Write([]byte(`{"data":[]}`))
+	}))
+	defer target.Close()
+	source := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("X-API-Schemas", target.URL+"/schemas")
+		_, _ = w.Write([]byte(`{}`))
+	}))
+	defer source.Close()
+	_, err := NewRancherClient(&ClientOpts{Url: source.URL, AccessKey: "access", SecretKey: "secret"})
+	if reached.Load() {
+		t.Fatal("untrusted schema header sent an authenticated request to another origin")
+	}
+	if err == nil {
+		t.Fatal("cross-origin schema discovery was accepted")
+	}
+}
+
+func TestRequestOriginSeparatesAuthorityFromPath(t *testing.T) {
+	origin, err := newRequestOrigin("https://API.example.test:443/custom/v2-beta")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range []struct {
+		value string
+		allow bool
+	}{
+		{"https://api.example.test/other/path?limit=1", true},
+		{"https://api.example.test:0443/custom/v2-beta", true},
+		{"/custom/projects", true},
+		{"projects?limit=1", true},
+		{"/%2f%2fevil.example/path", true},
+		{"//evil.example/custom/v2-beta", false},
+		{"https://api.example.test.evil.example/custom/v2-beta", false},
+		{"https://api.example.test@evil.example/custom/v2-beta", false},
+		{"https://api.example.test:444/custom/v2-beta", false},
+		{"http://api.example.test:443/custom/v2-beta", false},
+		{"https:opaque", false},
+		{"file:///custom/v2-beta", false},
+		{"https://api.example.test:%34%34%33/", false},
+	} {
+		t.Run(test.value, func(t *testing.T) {
+			u, err := origin.resolve(test.value)
+			if (err == nil) != test.allow {
+				t.Fatalf("allow=%t err=%v", test.allow, err)
+			}
+			if err == nil && !strings.EqualFold(u.Hostname(), "api.example.test") {
+				t.Fatal("path changed the request authority")
+			}
+		})
+	}
+	for _, root := range []string{"http://10.0.0.1:8080/prefix", "https://custom.internal/root", "http://[::1]:8080/v2-beta"} {
+		origin, err := newRequestOrigin(root)
+		if err != nil {
+			t.Fatal("legitimate administrator root rejected:", err)
+		}
+		if _, err := origin.resolve(root); err != nil {
+			t.Fatal(err)
+		}
+	}
+	v6, err := newRequestOrigin("http://[::1]:8080/root")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := v6.resolve("http://[0:0:0:0:0:0:0:1]:8080/other"); err != nil {
+		t.Fatal("equivalent IPv6 host rejected:", err)
+	}
+	v4, err := newRequestOrigin("http://127.0.0.1:8080/root")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := v4.resolve("http://[::ffff:127.0.0.1]:8080/root"); err == nil {
+		t.Fatal("IPv4-mapped IPv6 authority was collapsed into the IPv4 Host")
+	}
+	zoned, err := newRequestOrigin("http://[fe80::1%25eth0]:8080/root")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := zoned.resolve("http://[fe80::1%25ETH0]:8080/root"); err == nil {
+		t.Fatal("distinct IPv6 interface zone accepted")
+	}
+}
+
+func TestAllAuthenticatedEntriesRejectCrossOriginAndKeepConstructorOrigin(t *testing.T) {
+	var reached atomic.Int32
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		reached.Add(1)
+		_, _ = w.Write([]byte(`{}`))
+	}))
+	defer target.Close()
+	var authenticated atomic.Int32
+	var source *httptest.Server
+	source = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		user, password, ok := r.BasicAuth()
+		if !ok || user != "access" || password != "secret" {
+			http.Error(w, "authentication missing", http.StatusUnauthorized)
+			return
+		}
+		authenticated.Add(1)
+		if r.URL.Path == "/custom/v2-beta" {
+			w.Header().Set("X-API-Schemas", source.URL+"/custom/v2-beta")
+			_, _ = w.Write([]byte(`{"data":[]}`))
+			return
+		}
+		if r.URL.Path == "/start" {
+			http.Redirect(w, r, "/finish", http.StatusFound)
+			return
+		}
+		_, _ = w.Write([]byte(`{}`))
+	}))
+	defer source.Close()
+	client, err := NewRancherClient(&ClientOpts{Url: source.URL + "/custom/v2-beta", AccessKey: "access", SecretKey: "secret"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	base := client.RancherBaseClient.(*RancherBaseClientImpl)
+	base.Types["project"] = Schema{Resource: Resource{Links: map[string]string{COLLECTION: target.URL}}, CollectionMethods: []string{"GET"}}
+	resource := Resource{Links: map[string]string{"self": target.URL}, Actions: map[string]string{"activate": target.URL}}
+	for name, call := range map[string]func() error{
+		"get":        func() error { return base.doGet(target.URL, nil, &map[string]interface{}{}) },
+		"delete":     func() error { return base.doDelete(target.URL) },
+		"modify":     func() error { return base.doModify("POST", target.URL, nil, nil) },
+		"link":       func() error { return base.GetLink(resource, "self", nil) },
+		"pagination": func() error { return base.doNext(target.URL, nil) },
+		"collection": func() error { return base.doList("project", nil, nil) },
+		"action":     func() error { return base.doAction("project", "activate", &resource, nil, nil) },
+		"websocket": func() error {
+			_, _, err := base.Websocket("ws"+strings.TrimPrefix(target.URL, "http"), nil)
+			return err
+		},
+		"websocket Host override": func() error {
+			u, _ := url.Parse(target.URL)
+			_, _, err := base.Websocket("ws"+strings.TrimPrefix(source.URL, "http"), map[string][]string{"Host": {u.Host}})
+			return err
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if err := call(); err == nil || !strings.Contains(err.Error(), "cross-origin") {
+				t.Fatal("cross-origin authenticated entry accepted:", err)
+			}
+		})
+	}
+	base.Opts.Url = target.URL // GetOpts exposes configuration, not the origin trust decision.
+	if err := base.doGet(target.URL, nil, nil); err == nil {
+		t.Fatal("mutable ClientOpts replaced the constructor origin")
+	}
+	if reached.Load() != 0 {
+		t.Fatal("a cross-origin entry reached the target")
+	}
+	if err := base.doGet("/start", nil, &map[string]interface{}{}); err != nil {
+		t.Fatal("same-origin relative path/redirect failed:", err)
+	}
+	if authenticated.Load() != 3 {
+		t.Fatalf("authenticated requests=%d, want discovery and both redirect hops", authenticated.Load())
+	}
+}
+
+func TestControlPlaneErrorSummaryOmitsPayloadAndRequestSecrets(t *testing.T) {
+	apiError := &ApiError{StatusCode: 503, Status: "503 Unavailable\r\nforged\x1b", Msg: "secret response payload", Body: "secret response payload", Url: "https://user:password@example.test/?token=secret"}
+	for _, err := range []error{apiError, &url.Error{Op: "Get", URL: apiError.Url, Err: apiError}} {
+		text := utils.SanitizeLogText(ErrorSummary(err))
+		if !strings.Contains(text, "503") || strings.ContainsAny(text, "\r\n\x1b") {
+			t.Fatal("HTTP diagnosis lost or unsafe controls survived")
+		}
+		for _, secret := range []string{"payload", "secret", "password", "token="} {
+			if strings.Contains(text, secret) {
+				t.Fatal("error log exposed request/response material")
+			}
+		}
+	}
+	plain := errors.New("connection refused")
+	if ErrorSummary(plain) != plain.Error() || ErrorSummary(nil) != "" {
+		t.Fatal("ordinary error diagnosis changed")
+	}
+	requestError := &url.Error{Op: "Get", URL: apiError.Url, Err: plain}
+	if actual := ErrorSummary(requestError); actual != "Get: connection refused" {
+		t.Fatal("request URL was not omitted from the network diagnosis")
 	}
 }

@@ -106,6 +106,28 @@ func runtimeWeights(r *drainRuntime) map[string]int {
 	return weights
 }
 
+func TestReadPIDAcceptsOnlyPositiveDecimalGenerations(t *testing.T) {
+	for _, test := range []struct{ input, want string }{
+		{"123\n", "123"}, {"123\r\n", "123"}, {"00123\n", "123"},
+		{"", ""}, {"0\n", ""}, {"-1\n", ""}, {"123\nforged", ""},
+		{"123\x1b[2J", ""}, {"123\u2028forged", ""}, {"99999999999999999999999", ""},
+	} {
+		t.Run(test.input, func(t *testing.T) {
+			cfg := &haproxyConfig{PidFile: filepath.Join(t.TempDir(), "haproxy.pid")}
+			if err := os.WriteFile(cfg.PidFile, []byte(test.input), 0600); err != nil {
+				t.Fatal(err)
+			}
+			pid, err := cfg.readPid()
+			if pid != test.want || (err == nil) != (test.want != "") {
+				t.Fatalf("pid=%q err=%v", pid, err)
+			}
+			if err != nil && strings.Contains(err.Error(), "forged") {
+				t.Fatal("invalid PID diagnostic echoed untrusted file contents")
+			}
+		})
+	}
+}
+
 func TestDrainWithoutSessionsStillRecoversBothBackendWeights(t *testing.T) {
 	p, r, ep, _ := recoveryFixture(t)
 	if p.DrainEndpoint(ep) {

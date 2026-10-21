@@ -81,6 +81,9 @@ uses only the existing controller-owned drain source, honors desired edits, and
 preserves manual zero, MAINT/DRAIN, and nondefault runtime overrides. This is not
 general runtime-weight persistence across reloads or controller restarts. Source
 tests cover this two-reload sequence; native lifecycle acceptance remains pending.
+The same unreleased source pins authenticated API requests to the administrator's
+configured origin and keeps initialization/PID diagnostics control-safe without
+logging API response bodies.
 
 The backend state fields follow the [HAProxy Runtime API management contract](https://docs.haproxy.org/3.4/management.html#show%20servers%20state).
 

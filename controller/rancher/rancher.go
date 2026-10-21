@@ -88,9 +88,9 @@ func (lbc *LoadBalancerController) Init(metadataURL string) {
 		SecretKey: cattleEnvAdminSecretKey,
 	}
 
-	client, err := client.NewRancherClient(opts)
+	apiClient, err := client.NewRancherClient(opts)
 	if err != nil {
-		log.Fatalf("Failed to create control-plane client %v", err)
+		log.Fatalf("Failed to create control-plane client %s", utils.SanitizeLogText(client.ErrorSummary(err)))
 	}
 
 	pollInterval, err := strconv.Atoi(pollIntervalStr)
@@ -120,7 +120,7 @@ func (lbc *LoadBalancerController) Init(metadataURL string) {
 	defaultCertDir := lbSvc.Labels["io.rancher.lb_service.default_cert_dir"]
 
 	certFetcher := &RCertificateFetcher{
-		Client:              client,
+		Client:              apiClient,
 		mu:                  &sync.RWMutex{},
 		updateCheckInterval: pollInterval,
 		forceUpdateInterval: forceUpdateInt,
