@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"os"
 	"regexp"
@@ -156,15 +157,104 @@ func safeURLForLog(value string) string {
 	return u.Redacted()
 }
 
-func newHTTPClient(timeout time.Duration) *http.Client {
+// ErrorSummary omits ApiError response bodies and url.Error request URLs while
+// retaining their failure category. Callers must still escape log controls.
+func ErrorSummary(err error) string {
+	if err == nil {
+		return ""
+	}
+	var apiError *ApiError
+	if errors.As(err, &apiError) {
+		return fmt.Sprintf("HTTP status=%d %s", apiError.StatusCode, apiError.Status)
+	}
+	var requestError *url.Error
+	if errors.As(err, &requestError) {
+		return requestError.Op + ": " + ErrorSummary(requestError.Err)
+	}
+	return err.Error()
+}
+
+// This constructor-time value is independent of mutable ClientOpts and of
+// every URL subsequently supplied by a control-plane response.
+type requestOrigin struct {
+	root               url.URL
+	scheme, host, port string
+}
+
+func originParts(u *url.URL) (scheme, host, port string, err error) {
+	scheme = strings.ToLower(u.Scheme)
+	host = u.Hostname()
+	if ip, parseErr := netip.ParseAddr(host); parseErr == nil {
+		host = ip.String()
+	} else if !strings.Contains(host, ":") {
+		host = strings.ToLower(host)
+	} // Preserve case-sensitive IPv6 zone identifiers.
+	if (scheme != "http" && scheme != "https") || host == "" || u.Opaque != "" {
+		return "", "", "", errors.New("control-plane URL must be absolute HTTP or HTTPS")
+	}
+	port = u.Port()
+	if port == "" {
+		if scheme == "https" {
+			port = "443"
+		} else {
+			port = "80"
+		}
+	} else {
+		number, parseErr := strconv.ParseUint(port, 10, 16)
+		if parseErr != nil {
+			return "", "", "", errors.New("invalid control-plane URL port")
+		}
+		port = strconv.FormatUint(number, 10)
+	}
+	return scheme, host, port, nil
+}
+
+func newRequestOrigin(root string) (requestOrigin, error) {
+	u, err := url.Parse(root)
+	if err != nil {
+		return requestOrigin{}, err
+	}
+	scheme, host, port, err := originParts(u)
+	if err != nil {
+		return requestOrigin{}, err
+	}
+	u.Scheme = scheme
+	return requestOrigin{root: *u, scheme: scheme, host: host, port: port}, nil
+}
+
+func (origin requestOrigin) resolve(value string) (*url.URL, error) {
+	if origin.scheme == "" {
+		return nil, errors.New("control-plane origin is not initialized")
+	}
+	u, err := url.Parse(value)
+	if err != nil {
+		return nil, err
+	}
+	u = origin.root.ResolveReference(u)
+	scheme, host, port, err := originParts(u)
+	if err != nil {
+		return nil, err
+	}
+	if scheme != origin.scheme || host != origin.host || port != origin.port {
+		return nil, errors.New("cross-origin control-plane URL blocked")
+	}
+	u.Scheme = scheme
+	return u, nil
+}
+
+func newHTTPClient(timeout time.Duration, origin requestOrigin) *http.Client {
 	return &http.Client{
 		Timeout: timeout,
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			req.Header.Del("Authorization")
 			if len(via) >= 10 {
 				return errors.New("stopped after 10 redirects")
 			}
-			if len(via) > 0 && (req.URL.Scheme != via[0].URL.Scheme || req.URL.Host != via[0].URL.Host) {
+			if _, err := origin.resolve(req.URL.String()); err != nil {
 				return errors.New("cross-origin redirect blocked")
+			}
+			if len(via) > 0 {
+				req.Header.Set("Authorization", via[0].Header.Get("Authorization"))
 			}
 			return nil
 		},
@@ -181,13 +271,16 @@ func setupRancherBaseClient(rancherClient *RancherBaseClientImpl, opts *ClientOp
 	if opts.Timeout == 0 {
 		opts.Timeout = time.Second * time.Duration(defaultTimeout())
 	}
-	client := newHTTPClient(opts.Timeout)
-	req, err := http.NewRequest("GET", opts.Url, nil)
+	rancherClient.origin, err = newRequestOrigin(opts.Url)
 	if err != nil {
 		return err
 	}
-
-	req.SetBasicAuth(opts.AccessKey, opts.SecretKey)
+	rancherClient.Opts = opts
+	client := rancherClient.newHttpClient()
+	req, err := rancherClient.newRequest("GET", opts.Url, nil)
+	if err != nil {
+		return err
+	}
 
 	resp, err := client.Do(req)
 	if err != nil {
@@ -202,16 +295,14 @@ func setupRancherBaseClient(rancherClient *RancherBaseClientImpl, opts *ClientOp
 
 	schemasUrls := resp.Header.Get("X-API-Schemas")
 	if len(schemasUrls) == 0 {
-		return errors.New("Failed to find schema at [" + opts.Url + "]")
+		return errors.New("control-plane response is missing X-API-Schemas")
 	}
 
 	if schemasUrls != opts.Url {
-		req, err = http.NewRequest("GET", schemasUrls, nil)
+		req, err = rancherClient.newRequest("GET", schemasUrls, nil)
 		if err != nil {
 			return err
 		}
-		req.SetBasicAuth(opts.AccessKey, opts.SecretKey)
-
 		resp, err = client.Do(req)
 		if err != nil {
 			return err
@@ -251,25 +342,35 @@ func NewListOpts() *ListOpts {
 	}
 }
 
-func (rancherClient *RancherBaseClientImpl) setupRequest(req *http.Request) {
+func (rancherClient *RancherBaseClientImpl) newRequest(method, value string, body io.Reader) (*http.Request, error) {
+	u, err := rancherClient.origin.resolve(value)
+	if err != nil {
+		return nil, err
+	}
+	if rancherClient.Opts == nil {
+		return nil, errors.New("control-plane credentials are not initialized")
+	}
+	req, err := http.NewRequest(method, u.String(), body)
+	if err != nil {
+		return nil, err
+	}
 	req.SetBasicAuth(rancherClient.Opts.AccessKey, rancherClient.Opts.SecretKey)
+	return req, nil
 }
 
 func (rancherClient *RancherBaseClientImpl) newHttpClient() *http.Client {
 	if rancherClient.Opts.Timeout == 0 {
 		rancherClient.Opts.Timeout = time.Second * time.Duration(defaultTimeout())
 	}
-	return newHTTPClient(rancherClient.Opts.Timeout)
+	return newHTTPClient(rancherClient.Opts.Timeout, rancherClient.origin)
 }
 
 func (rancherClient *RancherBaseClientImpl) doDelete(url string) error {
 	client := rancherClient.newHttpClient()
-	req, err := http.NewRequest("DELETE", url, nil)
+	req, err := rancherClient.newRequest("DELETE", url, nil)
 	if err != nil {
 		return err
 	}
-
-	rancherClient.setupRequest(req)
 
 	resp, err := client.Do(req)
 	if err != nil {
@@ -286,18 +387,48 @@ func (rancherClient *RancherBaseClientImpl) doDelete(url string) error {
 	return nil
 }
 
-func (rancherClient *RancherBaseClientImpl) Websocket(url string, headers map[string][]string) (*websocket.Conn, *http.Response, error) {
+func (rancherClient *RancherBaseClientImpl) Websocket(value string, headers map[string][]string) (*websocket.Conn, *http.Response, error) {
+	// WebSocket URLs use the corresponding HTTP origin. The dialer does not
+	// follow redirects; validate before adding any caller or Basic Auth header.
+	u, err := url.Parse(value)
+	if err != nil {
+		return nil, nil, err
+	}
+	switch u.Scheme {
+	case "ws":
+		u.Scheme = "http"
+	case "wss":
+		u.Scheme = "https"
+	default:
+		return nil, nil, errors.New("control-plane WebSocket URL must use ws or wss")
+	}
+	if _, err := rancherClient.origin.resolve(u.String()); err != nil {
+		return nil, nil, err
+	}
 	httpHeaders := http.Header{}
 	for k, v := range headers {
+		if strings.EqualFold(k, "Host") {
+			if len(v) != 1 {
+				return nil, nil, errors.New("invalid control-plane WebSocket Host header")
+			}
+			authority := *u
+			authority.Host = v[0]
+			if _, err := rancherClient.origin.resolve(authority.String()); err != nil {
+				return nil, nil, err
+			}
+		}
+		if strings.EqualFold(k, "Authorization") && rancherClient.Opts != nil {
+			continue
+		}
 		httpHeaders[k] = v
 	}
 
 	if rancherClient.Opts != nil {
 		s := rancherClient.Opts.AccessKey + ":" + rancherClient.Opts.SecretKey
-		httpHeaders.Add("Authorization", "Basic "+base64.StdEncoding.EncodeToString([]byte(s)))
+		httpHeaders.Set("Authorization", "Basic "+base64.StdEncoding.EncodeToString([]byte(s)))
 	}
 
-	return dialer.Dial(url, http.Header(httpHeaders))
+	return dialer.Dial(value, http.Header(httpHeaders))
 }
 
 func (rancherClient *RancherBaseClientImpl) doGet(url string, opts *ListOpts, respObject interface{}) error {
@@ -314,12 +445,10 @@ func (rancherClient *RancherBaseClientImpl) doGet(url string, opts *ListOpts, re
 	}
 
 	client := rancherClient.newHttpClient()
-	req, err := http.NewRequest("GET", url, nil)
+	req, err := rancherClient.newRequest("GET", url, nil)
 	if err != nil {
 		return err
 	}
-
-	rancherClient.setupRequest(req)
 
 	resp, err := client.Do(req)
 	if err != nil {
@@ -398,12 +527,11 @@ func (rancherClient *RancherBaseClientImpl) doModify(method string, url string, 
 	}
 
 	client := rancherClient.newHttpClient()
-	req, err := http.NewRequest(method, url, bytes.NewBuffer(bodyContent))
+	req, err := rancherClient.newRequest(method, url, bytes.NewBuffer(bodyContent))
 	if err != nil {
 		return err
 	}
 
-	rancherClient.setupRequest(req)
 	req.Header.Set("Content-Type", "application/json")
 
 	resp, err := client.Do(req)
@@ -592,12 +720,11 @@ func (rancherClient *RancherBaseClientImpl) doAction(schemaType string, action s
 	}
 
 	client := rancherClient.newHttpClient()
-	req, err := http.NewRequest("POST", actionUrl, input)
+	req, err := rancherClient.newRequest("POST", actionUrl, input)
 	if err != nil {
 		return err
 	}
 
-	rancherClient.setupRequest(req)
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Content-Length", "0")
 

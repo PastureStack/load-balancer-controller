@@ -10,6 +10,7 @@ type RancherBaseClientImpl struct {
 	Opts    *ClientOpts
 	Schemas *Schemas
 	Types   map[string]Schema
+	origin  requestOrigin
 }
 
 type RancherBaseClient interface {

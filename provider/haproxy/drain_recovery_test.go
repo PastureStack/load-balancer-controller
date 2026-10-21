@@ -106,6 +106,28 @@ func runtimeWeights(r *drainRuntime) map[string]int {
 	return weights
 }
 
+func TestReadPIDAcceptsOnlyPositiveDecimalGenerations(t *testing.T) {
+	for _, test := range []struct{ input, want string }{
+		{"123\n", "123"}, {"123\r\n", "123"}, {"00123\n", "123"},
+		{"", ""}, {"0\n", ""}, {"-1\n", ""}, {"123\nforged", ""},
+		{"123\x1b[2J", ""}, {"123\u2028forged", ""}, {"99999999999999999999999", ""},
+	} {
+		t.Run(test.input, func(t *testing.T) {
+			cfg := &haproxyConfig{PidFile: filepath.Join(t.TempDir(), "haproxy.pid")}
+			if err := os.WriteFile(cfg.PidFile, []byte(test.input), 0600); err != nil {
+				t.Fatal(err)
+			}
+			pid, err := cfg.readPid()
+			if pid != test.want || (err == nil) != (test.want != "") {
+				t.Fatalf("pid=%q err=%v", pid, err)
+			}
+			if err != nil && strings.Contains(err.Error(), "forged") {
+				t.Fatal("invalid PID diagnostic echoed untrusted file contents")
+			}
+		})
+	}
+}
+
 func TestDrainWithoutSessionsStillRecoversBothBackendWeights(t *testing.T) {
 	p, r, ep, _ := recoveryFixture(t)
 	if p.DrainEndpoint(ep) {
@@ -249,6 +271,236 @@ func TestCompletedDrainStoppingReloadRetainsOriginalWeightsUntilRunning(t *testi
 	}
 	if !reflect.DeepEqual(runtimeWeights(r), map[string]int{"be-one/target": 7, "be-two/target": 23}) {
 		t.Fatal(runtimeWeights(r))
+	}
+}
+
+func completedStoppingReloadFixture(t *testing.T, completeFirst bool) (*Provider, *drainRuntime, *config.Endpoint, *config.LoadBalancerConfig) {
+	t.Helper()
+	p, r, ep, cfg := recoveryFixture(t)
+	r.sessions = 1
+	p.DrainEndpoint(ep)
+	if completeFirst {
+		p.RemoveEndpointFromDrain(ep)
+	}
+	ep.Stopping = true
+	ep.Config = "check weight 0"
+	p.drainMgr.setDesired(cfg)
+	if err := os.WriteFile(p.cfg.PidFile, []byte("456\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	for key := range r.states {
+		r.initialWeights[key] = 0
+	}
+	if err := p.reconcileDrains(); err != nil {
+		t.Fatal(err)
+	}
+	if len(p.drainMgr.weights[ep.Name]) != 2 {
+		t.Fatal("completed drain lost owned weights during stopping reload")
+	}
+	if !completeFirst {
+		p.RemoveEndpointFromDrain(ep)
+	}
+	return p, r, ep, cfg
+}
+
+func runningReload(t *testing.T, p *Provider, r *drainRuntime, ep *config.Endpoint, cfg *config.LoadBalancerConfig) {
+	t.Helper()
+	ep.Stopping = false
+	ep.Config = "check"
+	p.drainMgr.setDesired(cfg)
+	if err := os.WriteFile(p.cfg.PidFile, []byte("789\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	for key, state := range r.states {
+		state.weight = 1
+		r.states[key] = state
+		r.initialWeights[key] = 1
+	}
+}
+
+func TestCompletedDrainRestoresOwnedWeightsAfterRunningReload(t *testing.T) {
+	for _, completeFirst := range []bool{true, false} {
+		t.Run(fmt.Sprintf("completeBeforeStopping=%t", completeFirst), func(t *testing.T) {
+			p, r, ep, cfg := completedStoppingReloadFixture(t, completeFirst)
+			runningReload(t, p, r, ep, cfg)
+			if err := p.reconcileDrains(); err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(runtimeWeights(r), map[string]int{"be-one/target": 7, "be-two/target": 23}) {
+				t.Fatal("running reload discarded controller-owned original weights:", runtimeWeights(r))
+			}
+			if len(p.drainMgr.weights) != 0 {
+				t.Fatal("verified restoration must clear ownership")
+			}
+		})
+	}
+}
+
+func TestCompletedRunningReloadPreservesManualAndDesiredAuthority(t *testing.T) {
+	for _, test := range []struct {
+		name             string
+		alter            func(*testing.T, *Provider, *drainRuntime, *config.Endpoint, *config.LoadBalancerConfig)
+		wantOne, wantTwo int
+	}{
+		{"manual zero", func(_ *testing.T, _ *Provider, r *drainRuntime, _ *config.Endpoint, _ *config.LoadBalancerConfig) {
+			s := r.states["be-one/target"]
+			s.weight = 0
+			r.states["be-one/target"] = s
+		}, 0, 23},
+		{"manual MAINT", func(_ *testing.T, _ *Provider, r *drainRuntime, _ *config.Endpoint, _ *config.LoadBalancerConfig) {
+			s := r.states["be-one/target"]
+			s.admin = 1
+			r.states["be-one/target"] = s
+		}, 1, 23},
+		{"manual DRAIN", func(_ *testing.T, _ *Provider, r *drainRuntime, _ *config.Endpoint, _ *config.LoadBalancerConfig) {
+			s := r.states["be-one/target"]
+			s.admin = 8
+			r.states["be-one/target"] = s
+		}, 1, 23},
+		{"manual custom weight", func(_ *testing.T, _ *Provider, r *drainRuntime, _ *config.Endpoint, _ *config.LoadBalancerConfig) {
+			s := r.states["be-one/target"]
+			s.weight = 31
+			r.states["be-one/target"] = s
+		}, 31, 23},
+		{"desired zero", func(_ *testing.T, p *Provider, r *drainRuntime, ep *config.Endpoint, cfg *config.LoadBalancerConfig) {
+			ep.Config = "check weight 0"
+			p.drainMgr.setDesired(cfg)
+			for key, s := range r.states {
+				s.weight = 0
+				r.states[key] = s
+				r.initialWeights[key] = 0
+			}
+		}, 0, 0},
+		{"desired disabled", func(_ *testing.T, p *Provider, _ *drainRuntime, ep *config.Endpoint, cfg *config.LoadBalancerConfig) {
+			ep.Config = "check disabled"
+			p.drainMgr.setDesired(cfg)
+		}, 1, 1},
+		{"desired changed", func(_ *testing.T, p *Provider, r *drainRuntime, ep *config.Endpoint, cfg *config.LoadBalancerConfig) {
+			ep.Config = "check weight 37"
+			p.drainMgr.setDesired(cfg)
+			for key, s := range r.states {
+				s.weight = 37
+				r.states[key] = s
+				r.initialWeights[key] = 37
+			}
+		}, 37, 37},
+		{"unapplied desired generation", func(_ *testing.T, _ *Provider, r *drainRuntime, _ *config.Endpoint, _ *config.LoadBalancerConfig) {
+			s := r.states["be-one/target"]
+			s.weight = 2
+			r.states["be-one/target"] = s
+			r.initialWeights["be-one/target"] = 2
+		}, 2, 23},
+		{"same process manual nonzero", func(t *testing.T, p *Provider, r *drainRuntime, _ *config.Endpoint, _ *config.LoadBalancerConfig) {
+			if err := os.WriteFile(p.cfg.PidFile, []byte("456\n"), 0600); err != nil {
+				t.Fatal(err)
+			}
+			// No running reload: an operator raised the stopping process's
+			// zero to 1. Even a desired default is not initialization proof.
+			for key := range r.states {
+				r.initialWeights[key] = 0
+			}
+		}, 1, 1},
+		{"unknown generation", func(_ *testing.T, p *Provider, _ *drainRuntime, ep *config.Endpoint, _ *config.LoadBalancerConfig) {
+			for key, owned := range p.drainMgr.weights[ep.Name] {
+				owned.stoppingReload = false
+				p.drainMgr.weights[ep.Name][key] = owned
+			}
+		}, 1, 1},
+		{"no ownership", func(_ *testing.T, p *Provider, _ *drainRuntime, ep *config.Endpoint, _ *config.LoadBalancerConfig) {
+			delete(p.drainMgr.weights, ep.Name)
+		}, 1, 1},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			p, r, ep, cfg := completedStoppingReloadFixture(t, true)
+			runningReload(t, p, r, ep, cfg)
+			test.alter(t, p, r, ep, cfg)
+			before := r.states["be-one/target"]
+			if err := p.reconcileDrains(); err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(runtimeWeights(r), map[string]int{"be-one/target": test.wantOne, "be-two/target": test.wantTwo}) {
+				t.Fatal(runtimeWeights(r))
+			}
+			if r.states["be-one/target"].admin != before.admin {
+				t.Fatal("manual admin state changed")
+			}
+			if len(p.drainMgr.weights) != 0 {
+				t.Fatal("completed restoration/control retained stale ownership")
+			}
+		})
+	}
+}
+
+func TestCompletedRunningReloadWaitsForHealth(t *testing.T) {
+	for _, block := range []string{"health", "DNS"} {
+		t.Run(block, func(t *testing.T) {
+			p, r, ep, cfg := completedStoppingReloadFixture(t, true)
+			runningReload(t, p, r, ep, cfg)
+			for key, state := range r.states {
+				if block == "health" {
+					state.operational = 0
+				} else {
+					state.admin = 0x20
+				}
+				r.states[key] = state
+			}
+			if err := p.reconcileDrains(); err != nil {
+				t.Fatal(err)
+			}
+			if len(p.drainMgr.weights[ep.Name]) != 2 || !reflect.DeepEqual(runtimeWeights(r), map[string]int{"be-one/target": 1, "be-two/target": 1}) {
+				t.Fatal("unready replacement recovered or lost ownership")
+			}
+			for key, state := range r.states {
+				state.admin = 0
+				state.operational = 2
+				r.states[key] = state
+			}
+			if err := p.reconcileDrains(); err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(runtimeWeights(r), map[string]int{"be-one/target": 7, "be-two/target": 23}) {
+				t.Fatal(runtimeWeights(r))
+			}
+		})
+	}
+}
+
+func TestCompletedRunningReloadRetainsOwnershipUntilVerified(t *testing.T) {
+	for _, failure := range []string{"command", "readback", "ignored write"} {
+		t.Run(failure, func(t *testing.T) {
+			p, r, ep, cfg := completedStoppingReloadFixture(t, true)
+			runningReload(t, p, r, ep, cfg)
+			switch failure {
+			case "command":
+				r.fail["set server be-one/target weight 7"] = 1
+			case "ignored write":
+				r.ignoreWrites = true
+			case "readback":
+				p.drainMgr.command = func(cmd string) ([]string, error) {
+					out, err := r.command(cmd)
+					if cmd == "set server be-one/target weight 7" && err == nil {
+						r.fail["show servers state"] = 1
+					}
+					return out, err
+				}
+			}
+			if err := p.reconcileDrains(); err == nil {
+				t.Fatal("missing restoration failure")
+			}
+			if len(p.drainMgr.weights[ep.Name]) == 0 {
+				t.Fatal("unverified restore discarded ownership")
+			}
+			r.ignoreWrites = false
+			if err := p.reconcileDrains(); err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(runtimeWeights(r), map[string]int{"be-one/target": 7, "be-two/target": 23}) {
+				t.Fatal(runtimeWeights(r))
+			}
+			if len(p.drainMgr.weights) != 0 {
+				t.Fatal("verified restore retained stale ownership")
+			}
+		})
 	}
 }
 

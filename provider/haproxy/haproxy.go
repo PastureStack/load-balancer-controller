@@ -139,9 +139,11 @@ func (cfg *haproxyConfig) readPid() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	pid := string(content)
-	pid = strings.TrimSuffix(pid, "\n")
-	return pid, err
+	pid, err := strconv.Atoi(strings.TrimSpace(string(content)))
+	if err != nil || pid <= 0 {
+		return "", errors.New("invalid HAProxy PID: expected a positive decimal process ID")
+	}
+	return strconv.Itoa(pid), nil
 }
 
 func (lbp *Provider) applyHaproxyConfig(lbConfig *config.LoadBalancerConfig) error {

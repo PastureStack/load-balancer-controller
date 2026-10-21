@@ -15,10 +15,11 @@ import (
 // an unowned zero weight, MAINT/DRAIN admin state or operator's nonzero weight
 // is not evidence of a stale controller drain.
 type drainWeight struct {
-	weight        int
-	initialWeight int
-	pid           string
-	retry         bool
+	weight         int
+	initialWeight  int
+	pid            string
+	stoppingReload bool
+	retry          bool
 }
 
 type desiredEndpoint struct {
@@ -217,6 +218,7 @@ func (lbp *Provider) reconcileDrains() error {
 						// configuration, not an unexplained runtime zero.
 						original.pid = pid
 						original.retry = false
+						original.stoppingReload = true
 						weights[key] = original
 						continue
 					}
@@ -251,21 +253,41 @@ func (lbp *Provider) reconcileDrains() error {
 		for key, original := range weights {
 			desired, present := dm.desired[key]
 			state, exists := states[key]
-			if !present || !exists || desired.disabled || desired.weight == 0 && !desired.temporaryZero || state.admin&operatorAdminState != 0 || state.weight != 0 {
+			if !present || !exists || desired.disabled || desired.weight == 0 && !desired.temporaryZero || state.admin&operatorAdminState != 0 {
 				delete(weights, key)
 				continue
 			}
 			if desired.temporaryZero && desired.weight == 0 {
+				if state.weight != 0 {
+					delete(weights, key)
+					continue
+				}
 				// DrainComplete and stopping metadata can arrive in either order.
 				// Keep the provenance while this lifecycle zero is desired. If a
 				// reload initialized that zero, bind only that proven generation.
 				if original.pid != pid && state.initialWeight == 0 {
 					original.pid = pid
+					original.stoppingReload = true
 					weights[key] = original
 				}
 				continue
 			}
-			if original.pid != pid {
+			restoreWeight := original.weight
+			if desired.weight != original.initialWeight {
+				// A later desired-config edit supersedes the old runtime weight.
+				restoreWeight = desired.weight
+			}
+			// Only an owned drain observed in an applied stopping generation can
+			// follow its next running reload. A new configured default is not an
+			// operator override; an unexplained zero/custom value still is.
+			runningReload := original.stoppingReload && original.pid != pid && state.weight > 0 &&
+				state.initialWeight == desired.weight &&
+				(state.weight == state.initialWeight || state.weight == restoreWeight)
+			if state.weight != 0 && !runningReload {
+				delete(weights, key)
+				continue
+			}
+			if original.pid != pid && !runningReload {
 				// No proof this controller zeroed this replacement process. A
 				// zero there can be an operator action; do not infer ownership.
 				log.Warnf("Drain recovery ownership expired: endpoint=%s backend=%s oldPID=%s currentPID=%s", name, key, original.pid, pid)
@@ -275,16 +297,11 @@ func (lbp *Provider) reconcileDrains() error {
 			if state.admin != 0 || state.operational != 2 {
 				continue
 			} // Wait for actual health recovery.
-			restoreWeight := original.weight
-			if desired.weight != original.initialWeight {
-				// A later desired-config edit supersedes the old runtime weight.
-				// Unchanged config still recovers an operator's original custom
-				// runtime weight, rather than resetting it to the config default.
-				restoreWeight = desired.weight
-			}
-			if err := dm.setWeightVerified(key, restoreWeight); err != nil {
-				failures = append(failures, fmt.Errorf("restore endpoint=%s backend=%s weight=%d: %w", name, key, restoreWeight, err))
-				continue
+			if state.weight != restoreWeight {
+				if err := dm.setWeightVerified(key, restoreWeight); err != nil {
+					failures = append(failures, fmt.Errorf("restore endpoint=%s backend=%s weight=%d: %w", name, key, restoreWeight, err))
+					continue
+				}
 			}
 			// Delete the only proof of drain ownership after verified readback.
 			delete(weights, key)
