@@ -6,26 +6,32 @@ This branch contains the compatibility runtime used by PastureStack Server to op
 
 ## Runtime image
 
-The currently published runtime image used when PastureStack Server creates a load-balancer service is:
+The maintained runtime release for PastureStack HAProxy load-balancer services is `v0.9.31`:
 
 ```text
-ghcr.io/pasturestack/load-balancer-service:v0.9.27
+ghcr.io/pasturestack/load-balancer-service:v0.9.31
 ```
 
-Release deployments pin the image by digest. The image is not intended to be started by itself because the control plane supplies metadata, API credentials, service links, port rules, and health-check configuration.
+Pin deployments to its published manifest digest:
 
-This branch prepares the `v0.9.31` source candidate for drain weight recovery.
-The candidate has passed the focused local race tests and static checks described
-below. The signed `v0.9.28` tag is retained, but its release build failed because
-Alpine no longer served several locked package versions; no runtime image or
-GitHub release was published. The signed `v0.9.29` tag refreshed those pins and
-built the image, but its version smoke failed with a stdout broken pipe before
-scanning or publication. The signed `v0.9.30` tag fixed that smoke check and
-passed the build, but its image scan correctly blocked publication on the old Go
-standard library and runtime zlib. This candidate uses checksum-pinned Go 1.27.3
-and explicitly pins runtime zlib 1.3.2-r1; all scanner and attestation gates stay
-in place. Protected pull-request CI and native PastureStack load-balancer QA
-remain release qualification gates; `v0.9.31` has not been tagged or published.
+```text
+ghcr.io/pasturestack/load-balancer-service@sha256:8133f65849afeb1436fc55e476bf3f8d152529af83e2f99151e4ee469ccd9167
+```
+
+The image is intended to be managed by PastureStack Server, not started by itself:
+the control plane supplies metadata, API credentials, service links, port rules,
+and health-check configuration. Selecting this release does not itself upgrade
+an existing Server installation or its load-balancer services.
+
+[Release v0.9.31](https://github.com/PastureStack/load-balancer-controller/releases/tag/v0.9.31)
+includes the controller archive, source and image SBOMs, checksums, and build
+provenance. Protected CI, race tests, source contracts, image/version checks,
+source/image vulnerability scans, and attestations passed for the published
+artifact. The runtime uses Go 1.27.3 and zlib 1.3.2-r1.
+
+Native PastureStack lifecycle and traffic acceptance, including dependent-service
+state transitions, remains pending; the build and supply-chain checks are not a
+claim that this platform-level acceptance has passed.
 
 ## Compatibility
 
@@ -40,7 +46,7 @@ It also accepts the generic `CATTLE_ACCESS_KEY` and `CATTLE_SECRET_KEY` pair use
 
 The HAProxy logging helper keeps its configuration under the standard `/etc/rsyslog.d` path and does not require a daemon PID file. Logging initialization is validated independently before HAProxy configuration is applied.
 
-### Drain weight recovery (v0.9.31 source candidate)
+### Drain weight recovery
 
 The controller records each backend's runtime weight before setting it to zero
 for `target.drain`, including drains that already have zero active sessions.
