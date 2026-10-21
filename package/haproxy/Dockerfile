@@ -64,7 +64,8 @@ RUN set -eux; \
         "procps-ng=${ALPINE_PROCPS_NG_VERSION}" \
         "rsyslog=${ALPINE_RSYSLOG_VERSION}" \
         "su-exec=${ALPINE_SU_EXEC_VERSION}" \
-        "tini=${ALPINE_TINI_VERSION}"; \
+        "tini=${ALPINE_TINI_VERSION}" \
+        "zlib=${ALPINE_ZLIB_VERSION}"; \
     { \
         printf 'repository\thttps://dl-cdn.alpinelinux.org/alpine/v3.24/main\n'; \
         apk info -v | LC_ALL=C sort; \
