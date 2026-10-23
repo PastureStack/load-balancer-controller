@@ -11,6 +11,8 @@ ARG HAPROXY_SHA256=7fa666d36d198275999e2a68dda44d3d37960f2f7aed3a595fb811f4fd051
 RUN set -eux; \
     . /licenses/alpine-apk.lock; \
     apk add --no-cache \
+        "musl=${ALPINE_MUSL_VERSION}" \
+        "musl-utils=${ALPINE_MUSL_VERSION}" \
         "build-base=${ALPINE_BUILD_BASE_VERSION}" \
         "ca-certificates=${ALPINE_CA_CERTIFICATES_VERSION}" \
         "curl=${ALPINE_CURL_VERSION}" \
@@ -53,6 +55,8 @@ LABEL org.opencontainers.image.source="https://github.com/PastureStack/load-bala
 RUN set -eux; \
     . /licenses/alpine-apk.lock; \
     apk add --no-cache \
+        "musl=${ALPINE_MUSL_VERSION}" \
+        "musl-utils=${ALPINE_MUSL_VERSION}" \
         "bash=${ALPINE_BASH_VERSION}" \
         "ca-certificates=${ALPINE_CA_CERTIFICATES_VERSION}" \
         "curl=${ALPINE_CURL_VERSION}" \
