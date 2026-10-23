@@ -2,7 +2,7 @@ kind	name	version	locator	integrity	usage
 archive	go-linux-amd64	1.27.3	https://go.dev/dl/go1.27.3.linux-amd64.tar.gz	sha256:65efbc80fdc1fa2cd2631cad5b481777a68e8725f34e89f50fc6ac714e379b40	dapper
 archive	go-linux-arm64	1.27.3	https://go.dev/dl/go1.27.3.linux-arm64.tar.gz	sha256:a06e99309dbcbdca1a8ccd2282c3ee146e55930886e26b4f1193269587165f49	dapper
 archive	haproxy	3.4.3	https://www.haproxy.org/download/3.4/src/haproxy-3.4.3.tar.gz	sha256:7fa666d36d198275999e2a68dda44d3d37960f2f7aed3a595fb811f4fd0515b5	load-balancer-service
-archive	ubuntu-ca-certificates-deb	20260601~26.04.1	https://snapshot.ubuntu.com/ubuntu/20260814T000000Z/pool/main/c/ca-certificates/ca-certificates_20260601~26.04.1_all.deb	sha256:6077d27c6b6f8b23590cb01ff877ed8c804a67a5442cc32b5a33da10d2bd0e90	dapper,load-balancer-service
+archive	ubuntu-ca-certificates-deb	20260816ubuntu0.26.04.1	https://archive.ubuntu.com/ubuntu/pool/main/c/ca-certificates/ca-certificates_20260816ubuntu0.26.04.1_all.deb	sha256:5b6326f1932cfd7be57130561dc78192f09ed9f58bfbe6606ed0c50510c3b6cd	dapper,load-balancer-service
 module	github.com/gorilla/websocket	v1.5.3	https://github.com/gorilla/websocket	h1:saDtZ6Pbx/0u+bgYQ3q96pZgCzfhKXGPqt7kZ72aNNg=	vendor
 module	github.com/sirupsen/logrus	v1.10.1	https://github.com/sirupsen/logrus	h1:xi4336Zh11WpU14fXR6I67V3yaTPQYwRx2WEtHbRg4Q=	vendor
 module	github.com/urfave/cli/v3	v3.11.0	https://github.com/urfave/cli	h1:P/euJp99kb9p0tlVY+iYTLYYTAQlfl0hR2gUO1Img1Q=	vendor
