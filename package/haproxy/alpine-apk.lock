@@ -2,6 +2,7 @@
 # The base image is pinned in Dockerfile; transitive packages are recorded in the image.
 ALPINE_BASH_VERSION='5.3.9-r1'
 ALPINE_BUILD_BASE_VERSION='0.5-r4'
+ALPINE_MUSL_VERSION='1.2.6-r3'
 ALPINE_CA_CERTIFICATES_VERSION='20261020-r0'
 ALPINE_CURL_VERSION='8.22.0-r0'
 ALPINE_LIBCRYPTO3_VERSION='3.5.9-r0'

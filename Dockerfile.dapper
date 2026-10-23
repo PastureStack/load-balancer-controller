@@ -3,7 +3,7 @@ FROM docker:29.7.2-cli@sha256:000bb62ff495f986c9f5578eb67cc2cb98b91138eda81d7762
 FROM ubuntu:26.04@sha256:2260313b31c8c011cd2eebe728008efac1b3982be73eb71348ea2648d2c0e09b
 
 COPY ubuntu-apt.lock /licenses/ubuntu-apt.lock
-ADD --checksum=sha256:6077d27c6b6f8b23590cb01ff877ed8c804a67a5442cc32b5a33da10d2bd0e90 https://snapshot.ubuntu.com/ubuntu/20260814T000000Z/pool/main/c/ca-certificates/ca-certificates_20260601~26.04.1_all.deb /tmp/ca-certificates.deb
+ADD --checksum=sha256:5b6326f1932cfd7be57130561dc78192f09ed9f58bfbe6606ed0c50510c3b6cd https://archive.ubuntu.com/ubuntu/pool/main/c/ca-certificates/ca-certificates_20260816ubuntu0.26.04.1_all.deb /tmp/ca-certificates.deb
 
 ARG DAPPER_HOST_ARCH=amd64
 ARG DOCKER_BUILDX_VERSION=0.36.1
@@ -15,6 +15,17 @@ ENV DEBIAN_FRONTEND=noninteractive
 ENV HOST_ARCH=${DAPPER_HOST_ARCH} \
     ARCH=${DAPPER_HOST_ARCH}
 
+ADD --checksum=sha256:76c12c7936d7a2e898f972b8b40ec74f3b58f1a534e67e256e1aa9d28c6c43d8 https://security.ubuntu.com/ubuntu/pool/main/p/python3.14/libpython3.14_3.14.4-1ubuntu0.2_amd64.deb /opt/python-abi-security/libpython3.14.deb
+ADD --checksum=sha256:6f2e99c80311934d0a031bb12fe2faca684b05e5b6bb225fe9a07a5c05fdb3da https://security.ubuntu.com/ubuntu/pool/main/p/python3.14/libpython3.14-dev_3.14.4-1ubuntu0.2_amd64.deb /opt/python-abi-security/libpython3.14-dev.deb
+ADD --checksum=sha256:fac6f0728cf9490a7a698e6b343e4140283e92355b060193c04f5770a666df8a https://security.ubuntu.com/ubuntu/pool/main/p/python3.14/libpython3.14-minimal_3.14.4-1ubuntu0.2_amd64.deb /opt/python-abi-security/libpython3.14-minimal.deb
+ADD --checksum=sha256:3c267ef0f902f763c3615cbf28dd6fe91d2e4f603075d7f03db99f8d4eb66f46 https://security.ubuntu.com/ubuntu/pool/main/p/python3.14/libpython3.14-stdlib_3.14.4-1ubuntu0.2_amd64.deb /opt/python-abi-security/libpython3.14-stdlib.deb
+ADD --checksum=sha256:780c308c47d8afcbb7d339f0023350e7cf60c1a37e9572a1f88774cc18f60526 https://security.ubuntu.com/ubuntu/pool/main/p/python3.14/python3.14_3.14.4-1ubuntu0.2_amd64.deb /opt/python-abi-security/python3.14.deb
+ADD --checksum=sha256:5e76e07f9ebb181eda92986297eca3488aaf81f53f0efcfdd32866a409f94071 https://security.ubuntu.com/ubuntu/pool/main/p/python3.14/python3.14-dev_3.14.4-1ubuntu0.2_amd64.deb /opt/python-abi-security/python3.14-dev.deb
+ADD --checksum=sha256:9d806b46f6dc429f156c5c53e6e2ec5bfc89302f9a441483b3249211e18e0067 https://security.ubuntu.com/ubuntu/pool/main/p/python3.14/python3.14-gdbm_3.14.4-1ubuntu0.2_amd64.deb /opt/python-abi-security/python3.14-gdbm.deb
+ADD --checksum=sha256:0a7ea8a52834f9b3de0f11758924f80f7a6ebcbb4b02a55ba4f457503569f55f https://security.ubuntu.com/ubuntu/pool/main/p/python3.14/python3.14-minimal_3.14.4-1ubuntu0.2_amd64.deb /opt/python-abi-security/python3.14-minimal.deb
+ADD --checksum=sha256:cad2456bf3cb57cb18d2c82b48b549e5b4ac6eee9b3e14e65334209387e3d0ae https://security.ubuntu.com/ubuntu/pool/universe/p/python3.14/python3.14-venv_3.14.4-1ubuntu0.2_amd64.deb /opt/python-abi-security/python3.14-venv.deb
+COPY scripts/install-python-abi-security /usr/local/bin/install-python-abi-security
+ADD --checksum=sha256:5b6326f1932cfd7be57130561dc78192f09ed9f58bfbe6606ed0c50510c3b6cd https://archive.ubuntu.com/ubuntu/pool/main/c/ca-certificates/ca-certificates_20260816ubuntu0.26.04.1_all.deb /opt/pasturestack-ca-certificates.deb
 RUN set -eux; \
     . /licenses/ubuntu-apt.lock; \
     rm -f /etc/apt/sources.list /etc/apt/sources.list.d/*.list /etc/apt/sources.list.d/*.sources; \
@@ -33,7 +44,7 @@ RUN set -eux; \
     apt-get update; \
     apt-get install -y --no-install-recommends \
         bash="${UBUNTU_APT_BASH_VERSION}" \
-        ca-certificates="${UBUNTU_APT_CA_CERTIFICATES_VERSION}" \
+        ca-certificates="${UBUNTU_APT_CA_CERTIFICATES_BOOTSTRAP_VERSION}" \
         curl="${UBUNTU_APT_CURL_VERSION}" \
         file="${UBUNTU_APT_FILE_VERSION}" \
         gcc="${UBUNTU_APT_GCC_VERSION}" \
@@ -43,6 +54,12 @@ RUN set -eux; \
         python3="${UBUNTU_APT_PYTHON3_VERSION}" \
         tar="${UBUNTU_APT_TAR_VERSION}" \
         xz-utils="${UBUNTU_APT_XZ_UTILS_VERSION}"; \
+    bash /usr/local/bin/install-python-abi-security && \
+    dpkg -i /opt/pasturestack-ca-certificates.deb && \
+    update-ca-certificates --fresh && \
+    test "$(dpkg-query -W -f='${Version}' ca-certificates)" = '20260816ubuntu0.26.04.1' && \
+    test ! -e /usr/share/ca-certificates/mozilla/emSign_ECC_Root_CA_-_G3.crt && \
+    rm -f /opt/pasturestack-ca-certificates.deb && \
     { \
         printf 'snapshot\t%s\n' "${UBUNTU_APT_SNAPSHOT}"; \
         dpkg-query -W -f='${binary:Package}\t${Version}\n' | LC_ALL=C sort; \
