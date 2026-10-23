@@ -21,4 +21,3 @@ for package in "${installed[@]}"; do
 done
 rm -rf /opt/python-abi-security
 printf 'PYTHON_ABI_SECURITY_OK version=3.14.4-1ubuntu0.2\n'
-
