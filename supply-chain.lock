@@ -1,6 +1,6 @@
 kind	name	version	locator	integrity	usage
-archive	go-linux-amd64	1.27.0	https://go.dev/dl/go1.27.0.linux-amd64.tar.gz	sha256:675c26c449cbb18fc24b74650de1eabbae6e16f64326fd85a283fb3b58280685	dapper
-archive	go-linux-arm64	1.27.0	https://go.dev/dl/go1.27.0.linux-arm64.tar.gz	sha256:51798d2c42d0e1c6ed7fd9f48728b4193abac9e8aad6dbac2fe96a81f5909bda	dapper
+archive	go-linux-amd64	1.27.3	https://go.dev/dl/go1.27.3.linux-amd64.tar.gz	sha256:65efbc80fdc1fa2cd2631cad5b481777a68e8725f34e89f50fc6ac714e379b40	dapper
+archive	go-linux-arm64	1.27.3	https://go.dev/dl/go1.27.3.linux-arm64.tar.gz	sha256:a06e99309dbcbdca1a8ccd2282c3ee146e55930886e26b4f1193269587165f49	dapper
 archive	haproxy	3.4.3	https://www.haproxy.org/download/3.4/src/haproxy-3.4.3.tar.gz	sha256:7fa666d36d198275999e2a68dda44d3d37960f2f7aed3a595fb811f4fd0515b5	load-balancer-service
 archive	ubuntu-ca-certificates-deb	20260601~26.04.1	https://snapshot.ubuntu.com/ubuntu/20260814T000000Z/pool/main/c/ca-certificates/ca-certificates_20260601~26.04.1_all.deb	sha256:6077d27c6b6f8b23590cb01ff877ed8c804a67a5442cc32b5a33da10d2bd0e90	dapper,load-balancer-service
 module	github.com/gorilla/websocket	v1.5.3	https://github.com/gorilla/websocket	h1:saDtZ6Pbx/0u+bgYQ3q96pZgCzfhKXGPqt7kZ72aNNg=	vendor

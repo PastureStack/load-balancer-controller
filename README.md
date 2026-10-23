@@ -6,10 +6,10 @@ This branch contains the compatibility runtime used by PastureStack Server to op
 
 ## Runtime image
 
-The maintained runtime release for PastureStack HAProxy load-balancer services is `v0.9.32`:
+The maintained runtime release for PastureStack HAProxy load-balancer services is `v0.9.33`:
 
 ```text
-ghcr.io/pasturestack/load-balancer-service:v0.9.32
+ghcr.io/pasturestack/load-balancer-service:v0.9.33
 ```
 
 Pin deployments to its published manifest digest:
@@ -23,7 +23,7 @@ the control plane supplies metadata, API credentials, service links, port rules,
 and health-check configuration. Selecting this release does not itself upgrade
 an existing Server installation or its load-balancer services.
 
-[Release v0.9.32](https://github.com/PastureStack/load-balancer-controller/releases/tag/v0.9.32)
+[Release v0.9.33](https://github.com/PastureStack/load-balancer-controller/releases/tag/v0.9.33)
 includes the controller archive, source and image SBOMs, checksums, and build
 provenance. Protected CI, race tests, source contracts, image/version checks,
 source/image vulnerability scans, and attestations passed for the published
@@ -115,3 +115,7 @@ reproducibility, Trivy, SBOM, and image checks used for releases.
 See [`ORIGIN.md`](ORIGIN.md) for the preserved upstream boundary and maintenance policy, [`COMPATIBILITY.md`](COMPATIBILITY.md) for the supported runtime contract, and [`SECURITY.md`](SECURITY.md) for reporting guidance.
 
 The root [`LICENSE`](LICENSE) remains authoritative. PastureStack does not claim ownership of upstream work.
+
+## October 2026 security maintenance
+
+Maintained Go builds select the patched Go 1.27.3 compiler without raising the existing Go language requirement. Ubuntu build/runtime stages apply the checksum-pinned `ca-certificates 20260816ubuntu0.26.04.1` security package after their frozen APT baseline; the final trust store and installed version are verified. Release artifacts must pass the repository's existing checks before publication.
