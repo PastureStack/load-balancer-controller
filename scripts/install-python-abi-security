@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+# Apply the official same-ABI security backport only to installed packages.
+set -euo pipefail
+packages=(libpython3.14 libpython3.14-dev libpython3.14-minimal libpython3.14-stdlib python3.14 python3.14-dev python3.14-gdbm python3.14-minimal python3.14-venv)
+debs=()
+installed=()
+for package in "${packages[@]}"; do
+    if dpkg-query -W -f='${db:Status-Status}' "$package" 2>/dev/null | grep -qx installed; then
+        file="/opt/python-abi-security/${package}.deb"
+        test "$(dpkg-deb -f "$file" Package)" = "$package"
+        test "$(dpkg-deb -f "$file" Version)" = 3.14.4-1ubuntu0.2
+        test "$(dpkg-deb -f "$file" Architecture)" = amd64
+        debs+=("$file")
+        installed+=("$package")
+    fi
+done
+test "${#debs[@]}" -gt 0
+dpkg -i "${debs[@]}"
+for package in "${installed[@]}"; do
+    test "$(dpkg-query -W -f='${Version}' "$package")" = 3.14.4-1ubuntu0.2
+done
+rm -rf /opt/python-abi-security
+printf 'PYTHON_ABI_SECURITY_OK version=3.14.4-1ubuntu0.2\n'
+
