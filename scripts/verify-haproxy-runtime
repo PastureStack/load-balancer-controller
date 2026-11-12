@@ -1,0 +1,61 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+image=${1:?usage: verify-haproxy-runtime IMAGE}
+version=$(docker image inspect -f '{{index .Config.Labels "org.pasturestack.haproxy.version"}}' "$image")
+aws_lc=$(docker image inspect -f '{{index .Config.Labels "org.pasturestack.aws-lc.version"}}' "$image")
+test -n "$version" && test -n "$aws_lc"
+details=$(docker run --rm --entrypoint /usr/sbin/haproxy "$image" -vv)
+printf '%s\n' "$details"
+grep -Fq "HAProxy version $version" <<< "$details"
+grep -Fq "AWS-LC $aws_lc" <<< "$details"
+grep -Fq 'Lua 5.4' <<< "$details"
+linkage=$(docker run --rm --entrypoint /bin/sh "$image" -c 'ldd /usr/sbin/haproxy')
+if grep -Eq 'lib(crypto|ssl)\.so|not found' <<< "$linkage"; then
+    echo 'Unexpected dynamic TLS dependency' >&2
+    exit 1
+fi
+
+fixture=$(mktemp -d)
+container=
+cleanup() {
+    if [[ -n "$container" ]]; then docker rm -f "$container" >/dev/null; fi
+    rm -rf "$fixture"
+}
+trap cleanup EXIT
+openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes -days 1 \
+    -subj /CN=localhost -addext 'subjectAltName=DNS:localhost' \
+    -keyout "$fixture/key.pem" -out "$fixture/cert.pem"
+cat "$fixture/cert.pem" "$fixture/key.pem" > "$fixture/endpoint.pem"
+chmod 0755 "$fixture"
+chmod 0444 "$fixture/endpoint.pem"
+printf "%s\n" "assert(_VERSION == 'Lua 5.4')" > "$fixture/check.lua"
+cat > "$fixture/haproxy.cfg" <<'CONFIG'
+global
+    tune.lua.bool-sample-conversion normal
+    lua-load /probe/check.lua
+defaults
+    mode http
+    timeout connect 2s
+    timeout client 5s
+    timeout server 5s
+frontend tls_probe
+    bind :8443 ssl crt /probe/endpoint.pem ssl-min-ver TLSv1.3
+    http-request return status 200 content-type text/plain string pasturestack-lb-tls-ok
+CONFIG
+chmod 0444 "$fixture/haproxy.cfg" "$fixture/check.lua"
+docker run --rm -v "$fixture:/probe:ro" --entrypoint /usr/sbin/haproxy "$image" \
+    -c -f /probe/haproxy.cfg
+container=$(docker run -d -p 127.0.0.1::8443 -v "$fixture:/probe:ro" \
+    --entrypoint /usr/sbin/haproxy "$image" -db -f /probe/haproxy.cfg)
+endpoint=$(docker port "$container" 8443/tcp)
+port=${endpoint##*:}
+if ! response=$(curl --fail --silent --show-error --max-time 5 \
+    --retry 6 --retry-all-errors --retry-delay 1 --retry-max-time 20 \
+    --noproxy '*' --resolve "localhost:$port:127.0.0.1" \
+    --tlsv1.3 --tls-max 1.3 --cacert "$fixture/cert.pem" "https://localhost:$port/") ||
+    [[ "$response" != pasturestack-lb-tls-ok ]]; then
+    docker logs "$container" >&2
+    exit 1
+fi
+printf '%s\n' 'HAPROXY_AWS_LC_LUA_AND_TLS_OK'

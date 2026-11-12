@@ -33,11 +33,11 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          archive="$RUNNER_TEMP/go1.27.3.linux-amd64.tar.gz"
+          archive="$RUNNER_TEMP/go1.27.4.linux-amd64.tar.gz"
           curl --fail --silent --show-error --location --output "$archive" \
-            'https://go.dev/dl/go1.27.3.linux-amd64.tar.gz'
+            'https://go.dev/dl/go1.27.4.linux-amd64.tar.gz'
           printf '%s  %s\n' \
-            '65efbc80fdc1fa2cd2631cad5b481777a68e8725f34e89f50fc6ac714e379b40' \
+            '7226736c2339719cda28fbf3a54d71aa63bcefe376e98cef00034268dab24840' \
             "$archive" | sha256sum --check
           tar -C "$RUNNER_TEMP" -xzf "$archive"
           export PATH="$RUNNER_TEMP/go/bin:$PATH"
@@ -95,9 +95,7 @@ jobs:
           grep -Fxq "$SERVICE_IMAGE" dist/images
           docker run --rm --entrypoint /usr/bin/lb-controller "$SERVICE_IMAGE" --version \
             | grep -Fq "security-${GITHUB_SHA}"
-          docker run --rm --entrypoint /usr/sbin/haproxy "$SERVICE_IMAGE" -vv \
-            | tee evidence/haproxy-version.txt
-          grep -Fq 'HAProxy version 3.4.3' evidence/haproxy-version.txt
+          bash scripts/verify-haproxy-runtime "$SERVICE_IMAGE" | tee evidence/haproxy-version.txt
           test "$(docker image inspect --format '{{.Config.User}}' "$SERVICE_IMAGE")" = '10001:10001'
 
       - name: Scan binary and runtime image
@@ -119,6 +117,7 @@ jobs:
             -v "$PWD/evidence:/evidence" -v "$cache:/root/.cache/trivy" "$TRIVY_IMAGE" image \
             --skip-db-update --offline-scan --format cyclonedx \
             --output /evidence/image.cdx.json "$SERVICE_IMAGE"
+          python3 scripts/record-haproxy-sbom.py "$SERVICE_IMAGE" evidence/image.cdx.json
           python3 - <<'PY'
           import json
           from pathlib import Path

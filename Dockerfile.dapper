@@ -3,13 +3,13 @@ FROM docker:29.7.2-cli@sha256:000bb62ff495f986c9f5578eb67cc2cb98b91138eda81d7762
 FROM ubuntu:26.04@sha256:2260313b31c8c011cd2eebe728008efac1b3982be73eb71348ea2648d2c0e09b
 
 COPY ubuntu-apt.lock /licenses/ubuntu-apt.lock
-ADD --checksum=sha256:5b6326f1932cfd7be57130561dc78192f09ed9f58bfbe6606ed0c50510c3b6cd https://archive.ubuntu.com/ubuntu/pool/main/c/ca-certificates/ca-certificates_20260816ubuntu0.26.04.1_all.deb /tmp/ca-certificates.deb
+ADD --checksum=sha256:a7e3bf769aec16ba21ca39cba180d6d311dafcbae68346a05f137c5cc26c9ca6 https://security.ubuntu.com/ubuntu/pool/main/c/ca-certificates/ca-certificates_20260816ubuntu0.26.04.2_all.deb /tmp/ca-certificates.deb
 
 ARG DAPPER_HOST_ARCH=amd64
 ARG DOCKER_BUILDX_VERSION=0.36.1
-ARG GO_VERSION=1.27.3
-ARG GO_LINUX_AMD64_SHA256=65efbc80fdc1fa2cd2631cad5b481777a68e8725f34e89f50fc6ac714e379b40
-ARG GO_LINUX_ARM64_SHA256=a06e99309dbcbdca1a8ccd2282c3ee146e55930886e26b4f1193269587165f49
+ARG GO_VERSION=1.27.4
+ARG GO_LINUX_AMD64_SHA256=7226736c2339719cda28fbf3a54d71aa63bcefe376e98cef00034268dab24840
+ARG GO_LINUX_ARM64_SHA256=3392582988a273a87ab5043ee1b2c9c17a2c3c00580bf9326c47a2e0aaaeac92
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV HOST_ARCH=${DAPPER_HOST_ARCH} \
@@ -25,7 +25,7 @@ ADD --checksum=sha256:9d806b46f6dc429f156c5c53e6e2ec5bfc89302f9a441483b3249211e1
 ADD --checksum=sha256:0a7ea8a52834f9b3de0f11758924f80f7a6ebcbb4b02a55ba4f457503569f55f https://security.ubuntu.com/ubuntu/pool/main/p/python3.14/python3.14-minimal_3.14.4-1ubuntu0.2_amd64.deb /opt/python-abi-security/python3.14-minimal.deb
 ADD --checksum=sha256:cad2456bf3cb57cb18d2c82b48b549e5b4ac6eee9b3e14e65334209387e3d0ae https://security.ubuntu.com/ubuntu/pool/universe/p/python3.14/python3.14-venv_3.14.4-1ubuntu0.2_amd64.deb /opt/python-abi-security/python3.14-venv.deb
 COPY scripts/install-python-abi-security /usr/local/bin/install-python-abi-security
-ADD --checksum=sha256:5b6326f1932cfd7be57130561dc78192f09ed9f58bfbe6606ed0c50510c3b6cd https://archive.ubuntu.com/ubuntu/pool/main/c/ca-certificates/ca-certificates_20260816ubuntu0.26.04.1_all.deb /opt/pasturestack-ca-certificates.deb
+ADD --checksum=sha256:a7e3bf769aec16ba21ca39cba180d6d311dafcbae68346a05f137c5cc26c9ca6 https://security.ubuntu.com/ubuntu/pool/main/c/ca-certificates/ca-certificates_20260816ubuntu0.26.04.2_all.deb /opt/pasturestack-ca-certificates.deb
 RUN set -eux; \
     . /licenses/ubuntu-apt.lock; \
     rm -f /etc/apt/sources.list /etc/apt/sources.list.d/*.list /etc/apt/sources.list.d/*.sources; \
@@ -57,7 +57,7 @@ RUN set -eux; \
     bash /usr/local/bin/install-python-abi-security && \
     dpkg -i /opt/pasturestack-ca-certificates.deb && \
     update-ca-certificates --fresh && \
-    test "$(dpkg-query -W -f='${Version}' ca-certificates)" = '20260816ubuntu0.26.04.1' && \
+    test "$(dpkg-query -W -f='${Version}' ca-certificates)" = '20260816ubuntu0.26.04.2' && \
     test ! -e /usr/share/ca-certificates/mozilla/emSign_ECC_Root_CA_-_G3.crt && \
     rm -f /opt/pasturestack-ca-certificates.deb && \
     { \
