@@ -6,16 +6,10 @@ This branch contains the compatibility runtime used by PastureStack Server to op
 
 ## Runtime image
 
-The maintained runtime release for PastureStack HAProxy load-balancer services is `v0.9.33`:
+The maintained runtime release for PastureStack HAProxy load-balancer services is `v0.9.34`. It uses HAProxy 3.4.7 with AWS-LC 5.14.0 and Lua 5.4.
 
 ```text
-ghcr.io/pasturestack/load-balancer-service:v0.9.33
-```
-
-Pin deployments to its published manifest digest:
-
-```text
-ghcr.io/pasturestack/load-balancer-service@sha256:2c02ac4da2cab5308f68baca04a007b82cd192bccbd7bc38232bd210dc2c02ac
+ghcr.io/pasturestack/load-balancer-service:v0.9.34
 ```
 
 The image is intended to be managed by PastureStack Server, not started by itself:
@@ -23,15 +17,10 @@ the control plane supplies metadata, API credentials, service links, port rules,
 and health-check configuration. Selecting this release does not itself upgrade
 an existing Server installation or its load-balancer services.
 
-[Release v0.9.33](https://github.com/PastureStack/load-balancer-controller/releases/tag/v0.9.33)
-includes the controller archive, source and image SBOMs, checksums, and build
-provenance. Protected CI, race tests, source contracts, image/version checks,
-source/image vulnerability scans, and attestations passed for the published
-artifact. The runtime uses Go 1.27.3 and zlib 1.3.2-r1.
-
-Native PastureStack lifecycle and traffic acceptance, including dependent-service
-state transitions, remains pending; the build and supply-chain checks are not a
-claim that this platform-level acceptance has passed.
+The [release page](https://github.com/PastureStack/load-balancer-controller/releases/tag/v0.9.34)
+provides the manifest digest, controller archive, SBOMs, checksums, and build
+provenance. HAProxy links AWS-LC statically. Runtime tools such as curl
+use Alpine's OpenSSL packages.
 
 ## Compatibility
 
@@ -118,4 +107,4 @@ The root [`LICENSE`](LICENSE) remains authoritative. PastureStack does not claim
 
 ## October 2026 security maintenance
 
-Maintained Go builds select the patched Go 1.27.3 compiler without raising the existing Go language requirement. Ubuntu build/runtime stages apply the checksum-pinned `ca-certificates 20260816ubuntu0.26.04.1` security package after their frozen APT baseline; the final trust store and installed version are verified. Release artifacts must pass the repository's existing checks before publication.
+Maintained Go builds select the patched Go 1.27.4 compiler without raising the existing Go language requirement. Ubuntu build/runtime stages apply the checksum-pinned `ca-certificates 20260816ubuntu0.26.04.2` security package after their frozen APT baseline; the final trust store and installed version are verified. Release artifacts must pass the repository's existing checks before publication.

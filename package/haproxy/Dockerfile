@@ -1,12 +1,18 @@
 ARG ALPINE_IMAGE=docker.io/library/alpine:3.24@sha256:28bd5fe8b56d1bd048e5babf5b10710ebe0bae67db86916198a6eec434943f8b
+ARG HAPROXY_VERSION=3.4.7
+ARG HAPROXY_SHA256=ccfd342f3724c2cd659574044d788f44e20b212467c6bd5edbbfc517a2775dca
+ARG AWS_LC_VERSION=5.14.0
+ARG AWS_LC_SHA256=8895a9d2434e875e009e652a1015f9c2c275261634c7132253ca5aa60d266888
 
 FROM ${ALPINE_IMAGE} AS haproxy-builder
 
 COPY alpine-apk.lock /licenses/alpine-apk.lock
 
-ARG HAPROXY_VERSION=3.4.3
+ARG HAPROXY_VERSION
+ARG HAPROXY_SHA256
 ARG HAPROXY_SERIES=3.4
-ARG HAPROXY_SHA256=7fa666d36d198275999e2a68dda44d3d37960f2f7aed3a595fb811f4fd0515b5
+ARG AWS_LC_VERSION
+ARG AWS_LC_SHA256
 
 RUN set -eux; \
     . /licenses/alpine-apk.lock; \
@@ -14,13 +20,33 @@ RUN set -eux; \
         "musl=${ALPINE_MUSL_VERSION}" \
         "musl-utils=${ALPINE_MUSL_VERSION}" \
         "build-base=${ALPINE_BUILD_BASE_VERSION}" \
+        "cmake=${ALPINE_CMAKE_VERSION}" \
         "ca-certificates=${ALPINE_CA_CERTIFICATES_VERSION}" \
         "curl=${ALPINE_CURL_VERSION}" \
         "linux-headers=${ALPINE_LINUX_HEADERS_VERSION}" \
         "lua5.4-dev=${ALPINE_LUA5_4_DEV_VERSION}" \
-        "openssl-dev=${ALPINE_OPENSSL_DEV_VERSION}" \
         "pcre2-dev=${ALPINE_PCRE2_DEV_VERSION}" \
-        "zlib-dev=${ALPINE_ZLIB_DEV_VERSION}"; \
+        "zlib-dev=${ALPINE_ZLIB_DEV_VERSION}"
+
+# Use the upstream generated assembly from the verified release archive.
+# A private static link leaves the distribution TLS libraries available to curl.
+RUN set -eux; \
+    curl -fsSL --retry 5 --retry-all-errors --retry-delay 2 --connect-timeout 10 --max-time 300 \
+        -o /tmp/aws-lc.tar.gz "https://codeload.github.com/aws/aws-lc/tar.gz/refs/tags/v${AWS_LC_VERSION}"; \
+    echo "${AWS_LC_SHA256}  /tmp/aws-lc.tar.gz" | sha256sum -c -; \
+    mkdir /tmp/aws-lc; \
+    tar xzf /tmp/aws-lc.tar.gz -C /tmp/aws-lc --strip-components=1; \
+    cmake -S /tmp/aws-lc -B /tmp/aws-lc-build \
+        -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/opt/aws-lc -DCMAKE_INSTALL_LIBDIR=lib \
+        -DBUILD_SHARED_LIBS=OFF -DBUILD_TESTING=OFF -DBUILD_TOOL=OFF -DDISABLE_GO=ON -DDISABLE_PERL=ON; \
+    cmake --build /tmp/aws-lc-build --parallel "$(nproc)"; \
+    cmake --install /tmp/aws-lc-build; \
+    test -s /opt/aws-lc/lib/libssl.a; \
+    test -s /opt/aws-lc/lib/libcrypto.a; \
+    install -D -m 0644 /tmp/aws-lc/LICENSE /native-licenses/aws-lc/LICENSE; \
+    rm -rf /tmp/aws-lc /tmp/aws-lc-build /tmp/aws-lc.tar.gz
+
+RUN set -eux; \
     curl -fsSL --retry 5 --retry-all-errors --retry-delay 2 --connect-timeout 10 --max-time 300 \
         -o /tmp/haproxy.tar.gz "https://www.haproxy.org/download/${HAPROXY_SERIES}/src/haproxy-${HAPROXY_VERSION}.tar.gz"; \
     echo "${HAPROXY_SHA256}  /tmp/haproxy.tar.gz" | sha256sum -c -; \
@@ -28,6 +54,9 @@ RUN set -eux; \
     make -C "/tmp/haproxy-${HAPROXY_VERSION}" -j"$(nproc)" \
         TARGET=linux-musl \
         USE_OPENSSL=1 \
+        USE_OPENSSL_AWSLC=1 \
+        SSL_INC=/opt/aws-lc/include \
+        SSL_LIB=/opt/aws-lc/lib \
         USE_PCRE2=1 \
         USE_PCRE2_JIT=1 \
         USE_ZLIB=1 \
@@ -36,6 +65,7 @@ RUN set -eux; \
         LUA_INC=/usr/include/lua5.4 \
         LUA_LIB=/usr/lib/lua5.4; \
     make -C "/tmp/haproxy-${HAPROXY_VERSION}" install-bin; \
+    install -D -m 0644 "/tmp/haproxy-${HAPROXY_VERSION}/LICENSE" /native-licenses/haproxy/LICENSE; \
     mkdir -p /usr/local/share/haproxy/errors; \
     cp -a "/tmp/haproxy-${HAPROXY_VERSION}"/examples/errorfiles/*.http /usr/local/share/haproxy/errors/
 
@@ -45,12 +75,20 @@ COPY alpine-apk.lock /licenses/alpine-apk.lock
 
 ARG PASTURESTACK_IMAGE_VERSION=dev
 ARG SOURCE_REVISION=unknown
+ARG HAPROXY_VERSION
+ARG HAPROXY_SHA256
+ARG AWS_LC_VERSION
+ARG AWS_LC_SHA256
 
 LABEL org.opencontainers.image.source="https://github.com/PastureStack/load-balancer-controller" \
       org.opencontainers.image.description="PastureStack HAProxy load-balancer service compatibility image." \
       org.opencontainers.image.licenses="Apache-2.0" \
       org.opencontainers.image.version="${PASTURESTACK_IMAGE_VERSION}" \
-      org.opencontainers.image.revision="${SOURCE_REVISION}"
+      org.opencontainers.image.revision="${SOURCE_REVISION}" \
+      org.pasturestack.haproxy.version="${HAPROXY_VERSION}" \
+      org.pasturestack.haproxy.source-sha256="${HAPROXY_SHA256}" \
+      org.pasturestack.aws-lc.version="${AWS_LC_VERSION}" \
+      org.pasturestack.aws-lc.source-sha256="${AWS_LC_SHA256}"
 
 RUN set -eux; \
     . /licenses/alpine-apk.lock; \
@@ -77,6 +115,7 @@ RUN set -eux; \
 
 COPY --from=haproxy-builder /usr/local/sbin/haproxy /usr/sbin/haproxy
 COPY --from=haproxy-builder /usr/local/share/haproxy/errors /etc/haproxy/errors
+COPY --from=haproxy-builder /native-licenses/ /usr/share/licenses/
 
 RUN set -eux; \
     addgroup -g 10001 -S haproxy; \
