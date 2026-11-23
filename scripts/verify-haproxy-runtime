@@ -9,7 +9,7 @@ details=$(docker run --rm --entrypoint /usr/sbin/haproxy "$image" -vv)
 printf '%s\n' "$details"
 grep -Fq "HAProxy version $version" <<< "$details"
 grep -Fq "AWS-LC $aws_lc" <<< "$details"
-grep -Fq 'Lua 5.4' <<< "$details"
+grep -Fq 'Lua 5.4.8' <<< "$details"
 linkage=$(docker run --rm --entrypoint /bin/sh "$image" -c 'ldd /usr/sbin/haproxy')
 if grep -Eq 'lib(crypto|ssl)\.so|not found' <<< "$linkage"; then
     echo 'Unexpected dynamic TLS dependency' >&2
