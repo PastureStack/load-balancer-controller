@@ -9,6 +9,7 @@ mkdir -p "${output_dir}"
 
 manifest="${output_dir}/manifest.tsv"
 printf 'module\tversion\tlicense_path\tsha256\n' > "${manifest}"
+module_count=0
 while IFS=$'\t' read -r module version; do
     source_dir="${root_dir}/vendor/${module}"
     [[ -d "${source_dir}" && ! -L "${source_dir}" ]]
@@ -23,7 +24,9 @@ while IFS=$'\t' read -r module version; do
         found=$((found + 1))
     done < <(find "${source_dir}" -maxdepth 1 -type f \( -iname 'LICENSE*' -o -iname 'NOTICE*' -o -iname 'COPYING*' \) -print0 | LC_ALL=C sort -z)
     [[ "${found}" -gt 0 ]] || { printf 'No vendored license for %s\n' "${module}" >&2; exit 1; }
+    module_count=$((module_count + 1))
 done < <(awk '/^# [^=]/ { print $2 "\t" $3 }' "${root_dir}/vendor/modules.txt")
 
-[[ "$(wc -l < "${manifest}")" -eq 5 ]]
-printf 'Vendored license bundle created for 4 modules.\n'
+[[ "${module_count}" -gt 0 ]]
+[[ "$(awk -F '\t' 'NR > 1 { seen[$1]=1 } END { print length(seen) }' "${manifest}")" -eq "${module_count}" ]]
+printf 'Vendored license bundle created for %s modules.\n' "${module_count}"
