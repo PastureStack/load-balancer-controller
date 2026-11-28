@@ -6,10 +6,10 @@ This branch contains the compatibility runtime used by PastureStack Server to op
 
 ## Runtime image
 
-The maintained runtime release for PastureStack HAProxy load-balancer services is `v0.9.35`. It uses HAProxy 3.4.8 with AWS-LC 5.14.0 and Lua 5.4.8.
+The maintained runtime release for PastureStack HAProxy load-balancer services is `v0.9.36`. It uses HAProxy 3.4.9 with AWS-LC 5.15.0 and Lua 5.4.8.
 
 ```text
-ghcr.io/pasturestack/load-balancer-service:v0.9.35
+ghcr.io/pasturestack/load-balancer-service:v0.9.36
 ```
 
 The image is intended to be managed by PastureStack Server, not started by itself:
@@ -17,17 +17,23 @@ the control plane supplies metadata, API credentials, service links, port rules,
 and health-check configuration. Selecting this release does not itself upgrade
 an existing Server installation or its load-balancer services.
 
-The [release page](https://github.com/PastureStack/load-balancer-controller/releases/tag/v0.9.35)
+The [release page](https://github.com/PastureStack/load-balancer-controller/releases/tag/v0.9.36)
 provides the manifest digest, controller archive, SBOMs, checksums, and build
 provenance. HAProxy links AWS-LC statically. Runtime tools such as curl
 use Alpine's OpenSSL packages.
 
-HAProxy 3.4.8 stays on the 3.4 LTS series. Its source archive is pinned to
-SHA-256 `024bd521a6cbbe32b426853147e6bbd6a89b107c5a34144846193fee5b7c6ed1`,
-as published in the [upstream checksum](https://www.haproxy.org/download/3.4/src/haproxy-3.4.8.tar.gz.sha256).
+HAProxy 3.4.9 stays on the 3.4 LTS series. Its source archive is pinned to
+SHA-256 `896c55b6029ec2a841617e92a327a335f36a8968e7d51a47eada159673c2f320`,
+as published in the [upstream checksum](https://www.haproxy.org/download/3.4/src/haproxy-3.4.9.tar.gz.sha256).
 The [upstream changelog](https://www.haproxy.org/download/3.4/src/CHANGELOG)
-includes HTTP message handling, graceful-stop, TLS, and Lua fixes. The
-AWS-LC and Lua versions, controller behavior, and startup interface are unchanged.
+includes HTTP message handling, graceful-stop, TLS, and Lua fixes. AWS-LC is updated to 5.15.0 from its checksum-pinned upstream archive.
+Lua 5.4.8, controller behavior, startup arguments and distribution OpenSSL remain
+compatible; the private AWS-LC static link does not replace system TLS libraries.
+
+Gorilla WebSocket uses the upstream crypto/rand mask-key fix at
+`v1.5.4-0.20240701034025-d67f41855da4` (GO-2026-6278). The signed Alpine
+rsyslog packages are updated to 8.2610.0-r1; logging startup and TLS remain
+covered by the runtime checks.
 
 ## Compatibility
 
