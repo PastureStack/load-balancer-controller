@@ -30,6 +30,11 @@ includes HTTP message handling, graceful-stop, TLS, and Lua fixes. AWS-LC is upd
 Lua 5.4.8, controller behavior, startup arguments and distribution OpenSSL remain
 compatible; the private AWS-LC static link does not replace system TLS libraries.
 
+Gorilla WebSocket uses the upstream crypto/rand mask-key fix at
+`v1.5.4-0.20240701034025-d67f41855da4` (GO-2026-6278). The signed Alpine
+rsyslog packages are updated to 8.2610.0-r1; logging startup and TLS remain
+covered by the runtime checks.
+
 ## Compatibility
 
 The controller accepts role-specific credentials when the orchestration engine supplies them:

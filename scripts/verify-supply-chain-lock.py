@@ -24,6 +24,10 @@ def verify(root):
     reference = 'ghcr.io/aquasecurity/trivy:' + scanner['version'] + '@' + scanner['integrity']
     for workflow in ('release.yml', 'security-release-gate.yml'):
         assert 'TRIVY_IMAGE: ' + reference in (root / '.github/workflows' / workflow).read_text(), 'Scanner lock drift'
+    sums = set((root / 'go.sum').read_text().splitlines())
+    for module, version in re.findall(r'^\s*((?:github\.com|golang\.org)/\S+)\s+(v\S+)', (root / 'go.mod').read_text(), re.M):
+        row = rows[module]
+        assert row['version'] == version and module + ' ' + version + ' ' + row['integrity'] in sums, 'Module lock drift: ' + module
 
 
 if __name__ == '__main__':
