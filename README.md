@@ -104,7 +104,7 @@ make ci
 The build produces `ghcr.io/pasturestack/load-balancer-service:<version>`.
 The obsolete Kubernetes bootstrap sidecar is not part of the maintained product.
 
-The Go runtime now uses Go Modules with four current external modules. The
+The Go runtime uses Go Modules with a bounded dependency set. The
 Rancher 1.6 API, event, and metadata wire contracts required by Server are
 maintained as bounded internal compatibility packages instead of abandoned
 third-party dependencies.
